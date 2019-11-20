@@ -5,6 +5,8 @@ import pdb
 import numpy as np
 import pandas as pd
 
+# This module uses a text-processor class provided by mat2vec project
+# specifically designed for materials science articles
 mat2vec_path = '~/scratch-midway2/repos/mat2vec'
 
 from pybliometrics.scopus import AbstractRetrieval
@@ -20,10 +22,9 @@ class MatTextProcessor(MaterialsTextProcessor):
         """
 
         tokens = self.tokenize(text)
-        ptokens = [self.process(token)[0] for token in tokens]
-        pptokens = [self.make_phrases(token) for token in ptokens]
+        ptokens = [self.process(token, make_phrases=True)[0] for token in tokens]
 
-        return pptokens   
+        return ptokens   
 
     def make_training_file(self, dois, save_dir):
         """Downloading, pre-processsing and storing abstracts of a set
@@ -48,8 +49,8 @@ class MatTextProcessor(MaterialsTextProcessor):
             except:
                 continue
 
-            tokens = self.mat_preprocess(r.title) + [['.']] + self.mat_preprocess(r.description)
-            line = ' '.join(sum(tokens[:-3],[]))
+            tokens = self.mat_preprocess(r.title) + self.mat_preprocess(r.description)
+            line = ' '.join(sum(tokens,[]))
             doi_line = doi
             if doi!=dois[-1]:
                 line += '\n'
