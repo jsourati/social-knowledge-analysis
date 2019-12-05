@@ -57,7 +57,7 @@ class WOSextractor(object):
 
         
     def store_WOS_docs_info(self):
-
+        
         path = os.path.join(self.path, '{}_DSSHPSH.zip'.format(self.year))
         with ZipFile(path, 'r') as f:
 
@@ -112,8 +112,9 @@ class WOSextractor(object):
         available_types = [a.get('type') for
                            a in doc[2][0][0].getchildren()]
         for child in doc[2][0][0].getchildren():
-            if child.get('type')=='doi':
+            if 'doi' in child.get('type'):
                 docdoi = child.get('value')
+                docdoi = docdoi.replace('\\','')
 
         # date of the document
         docdate = None
@@ -126,6 +127,7 @@ class WOSextractor(object):
         for t in titles.getchildren():
             if t.get('type')=='item':
                 doctitle = t.text
+                doctitle = doctitle.replace('\\','')
                 doctitle = doctitle.replace('"','\\"')
                 break
 
@@ -134,6 +136,7 @@ class WOSextractor(object):
         if np.any(['abstract' in c for c in
                    [a.tag for a in doc[1][1].getchildren()]]):
             docabstract = doc[1][1][-1][0][0][0].text
+            docabstract = docabstract.replace('\\','')
             docabstract = docabstract.replace('"','\\"')
 
         return (doctype,
