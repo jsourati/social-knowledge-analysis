@@ -1,5 +1,6 @@
 import os
 import gc
+import re
 import sys
 import pdb
 import gzip
@@ -24,29 +25,25 @@ class WOSextractor(object):
             self.establish_connection(self.client_config)
             
             # creating database and table
-            self.db_base_name = sql_config['db_name']
-            self.table_name = sql_config['table_name']
-
+            self.db_name = sql_config['db_name']
+            
     def establish_connection(self, client_config):
         self.db = pymysql.connect(**self.client_config)
         self.crsr = self.db.cursor()
 
-    def create_db(self, year=None):
+    def create_db(self):
         self.year = year
-        db_name = self.db_base_name + '_{}'.format(year)
         
-        sql = 'CREATE DATABASE IF NOT EXISTS {};'.format(db_name)
+        sql = 'CREATE DATABASE IF NOT EXISTS {};'.format(self.db_name)
         try:
             self.crsr.execute(sql)    
-            sql = 'USE {};'.format(db_name)
+            sql = 'USE {};'.format(self.db_name)
             self.crsr.execute(sql)
-            print('Database {} is created'.format(db_name))
+            print('Database {} is created'.format(self.db_name))
         except:
             print('Something went wrong..')
 
-    def create_table(self, table_name=None):
-        if table_name is None:
-            table_name = self.table_name
+    def create_table(self, table_name):
         sql = "CREATE TABLE IF NOT EXISTS {} (number INT, \
                                               type TEXT, \
                                               date DATE, \
@@ -56,11 +53,14 @@ class WOSextractor(object):
         self.crsr.execute(sql)
 
         
-    def store_WOS_docs_info(self):
-        
-        path = os.path.join(self.path, '{}_DSSHPSH.zip'.format(self.year))
-        with ZipFile(path, 'r') as f:
+    def store_WOS_docs_info(self, table_name, year=None):
 
+        if year is None:
+            year = int(re.search(r'\d+', table_name).group())
+        path = os.path.join(self.path, '{}_DSSHPSH.zip'.format(year))
+
+        # starting reading the zip files
+        with ZipFile(path, 'r') as f:
             # reading all files in the namelist
             cnt = 0
             self.bad_rows = []
@@ -82,7 +82,7 @@ class WOSextractor(object):
                          docdoi) = self.extract_info_from_one_doc(doc)
 
                         sql = """INSERT INTO {} VALUES ({}, "{}", "{}", "{}", "{}", "{}")""".format(
-                            self.table_name, cnt, doctype, docdate, doctitle, docabstract, docdoi)
+                            table_name, cnt, doctype, docdate, doctitle, docabstract, docdoi)
 
                         try:
                             self.crsr.execute(sql)
