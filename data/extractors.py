@@ -79,7 +79,7 @@ class WOSextractor(object):
                          docdate,
                          doctitle,
                          docabstract,
-                         docdoi) = self.extract_info_from_one_doc(doc)
+                         docdoi) = extract_info_from_one_doc(doc)
 
                         sql = """INSERT INTO {} VALUES ({}, "{}", "{}", "{}", "{}", "{}")""".format(
                             table_name, cnt, doctype, docdate, doctitle, docabstract, docdoi)
@@ -98,53 +98,6 @@ class WOSextractor(object):
                     gc.collect()
                     
         self.db.commit()
-
-    def extract_info_from_one_doc(self, doc):
-        """Extracting various information from a single
-        document
-        """
-        
-        # type of the document
-        doctype = doc[1][0][4][0].text
-
-        # DOI of the document (if available)
-        docdoi = 'NA'
-        available_types = [a.get('type') for
-                           a in doc[2][0][0].getchildren()]
-        for child in doc[2][0][0].getchildren():
-            if 'doi' in child.get('type'):
-                docdoi = child.get('value')
-                docdoi = docdoi.replace('\\','')
-
-        # date of the document
-        docdate = None
-        if 'sortdate' in doc[1][0][1].attrib:
-            docdate = doc[1][0][1].get('sortdate')
-
-        # title
-        doctitle = 'NA'
-        titles = doc[1][0][2]
-        for t in titles.getchildren():
-            if t.get('type')=='item':
-                doctitle = t.text
-                doctitle = doctitle.replace('\\','')
-                doctitle = doctitle.replace('"','\\"')
-                break
-
-        # abstract
-        docabstract = 'NA'
-        if np.any(['abstract' in c for c in
-                   [a.tag for a in doc[1][1].getchildren()]]):
-            docabstract = doc[1][1][-1][0][0][0].text
-            docabstract = docabstract.replace('\\','')
-            docabstract = docabstract.replace('"','\\"')
-
-        return (doctype,
-                docdate,
-                doctitle,
-                docabstract,
-                docdoi)
-
         
     def reenter_bad_rows(self):
         for r in self.bad_rows:
@@ -152,3 +105,64 @@ class WOSextractor(object):
             self.crsr.execute(r)
 
         self.db.commit()
+
+
+def extract_info_from_one_doc(doc):
+    """Extracting various information from a single
+    document
+    """
+
+    # type of the document
+    doctype = doc[1][0][4][0].text
+
+    # DOI of the document (if available)
+    docdoi = 'NA'
+    available_types = [a.get('type') for
+                       a in doc[2][0][0].getchildren()]
+    for child in doc[2][0][0].getchildren():
+        if 'doi' in child.get('type'):
+            docdoi = child.get('value')
+            docdoi = docdoi.replace('\\','')
+
+    # date of the document
+    docdate = None
+    if 'sortdate' in doc[1][0][1].attrib:
+        docdate = doc[1][0][1].get('sortdate')
+
+    # title
+    doctitle = 'NA'
+    titles = doc[1][0][2]
+    for t in titles.getchildren():
+        if t.get('type')=='item':
+            doctitle = t.text
+            doctitle = doctitle.replace('\\','')
+            doctitle = doctitle.replace('"','\\"')
+            break
+
+    # abstract
+    docabstract = 'NA'
+    if np.any(['abstract' in c for c in
+               [a.tag for a in doc[1][1].getchildren()]]):
+        docabstract = doc[1][1][-1][0][0][0].text
+        docabstract = docabstract.replace('\\','')
+        docabstract = docabstract.replace('"','\\"')
+
+    # authors (names)
+    if False:
+        auths = ''
+        auth_nodes = doc[1][0][3].getchildren()
+        for i,node in enumerate(auth_nodes):
+            auth = node[3].text + ' ' + node[4].text
+            if i<len(auth_nodes)-1:
+                auths += auth + ', '
+            else:
+                auths += auth
+
+        # authors (IDs)
+    
+
+    return (doctype,
+            docdate,
+            doctitle,
+            docabstract,
+            docdoi)
