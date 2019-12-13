@@ -4,15 +4,17 @@ import pdb
 
 import numpy as np
 import pandas as pd
+from itertools import groupby
 
 # This module uses a text-processor class provided by mat2vec project
 # specifically designed for materials science articles
 mat2vec_path = '~/scratch-midway2/repos/mat2vec'
 
 from pybliometrics.scopus import AbstractRetrieval
-from mat2vec.processing.process import MaterialsTextProcessor
+from pybliometrics.scopus.exception import Scopus429Error
+#from mat2vec.processing.process import MaterialsTextProcessor
 
-class MatTextProcessor(MaterialsTextProcessor):
+class MatTextProcessor(object):
 
     def mat_preprocess(self, text):
         """Pre-processing a given text using tools provided by 
@@ -101,6 +103,9 @@ def Scopus_to_SQLtable(dois,
 
         try:
             r = AbstractRetrieval(doi)
+        except Scopus429Error:
+            print('Scopus resource exhausted. Check your quota.')
+            return
         except:
             bad_dois += [doi]
             if bad_dois_save_path is not None:
@@ -111,7 +116,11 @@ def Scopus_to_SQLtable(dois,
 
         # ROW IN PAPER TABLE
         title = r.title.replace('\"','')
-        abst = r.description.replace('\"','')
+        if r.description is not None:
+            abst = r.description.replace('\"','')
+        else:
+            abst = 'NA'
+            
         scomm = """INSERT INTO paper VALUES({},"{}","{}","{}","{}");""".format(
             paper_PK,
             r.doi,
@@ -119,18 +128,25 @@ def Scopus_to_SQLtable(dois,
             title,
             abst)
         # taking care of unicode characters
-        scomm = "{}".format(scomm.encode('utf-8'))
-        scomm = scomm[2:-1].replace('\\', '\\\\')
+        #scomm = "{}".format(scomm.encode('utf-8'))
+        #scomm = scomm[2:-1].replace('\\', '\\\\')
 
         sql_cursor.execute(scomm)
 
 
         # ROW IN AUTHOR TABLE
+        # skip the rest if no auhotrs were available
+        if r.authors is None:
+            paper_PK += 1
+            continue
         sql_cursor.execute('SELECT author_scopus_ID FROM author')
         curr_scopus_id_list = [a[0] for a in sql_cursor.fetchall()]
         paper_scopus_id_list = [a.auid for a in r.authors]
-        paper_scopus_id_list = list(np.unique(np.array(paper_scopus_id_list)))
         for i,scps_id in enumerate(paper_scopus_id_list):
+            # if repetitive author, ignore:
+            if scps_id in paper_scopus_id_list[:i]:
+                continue
+            
             if scps_id in curr_scopus_id_list:
                 # extract existing author PK from scopus ID
                 sql_cursor.execute('SELECT author_id \
