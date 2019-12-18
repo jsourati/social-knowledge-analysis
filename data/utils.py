@@ -12,9 +12,9 @@ mat2vec_path = '~/scratch-midway2/repos/mat2vec'
 
 from pybliometrics.scopus import AbstractRetrieval
 from pybliometrics.scopus.exception import Scopus429Error
-#from mat2vec.processing.process import MaterialsTextProcessor
+from mat2vec.processing.process import MaterialsTextProcessor
 
-class MatTextProcessor(object):
+class MatTextProcessor(MaterialsTextProcessor):
 
     def mat_preprocess(self, text):
         """Pre-processing a given text using tools provided by 
@@ -94,6 +94,9 @@ def Scopus_to_SQLtable(dois,
     sql_cursor.execute('SELECT doi FROM paper;')
     all_dois = sql_cursor.fetchall()
     all_dois = [a[0] for a in all_dois]
+    # ... same for authors
+    sql_cursor.execute('SELECT author_scopus_ID FROM author')
+    curr_scopus_id_list = [a[0] for a in sql_cursor.fetchall()]
 
     bad_dois = []
     for i,doi in enumerate(dois):
@@ -139,8 +142,6 @@ def Scopus_to_SQLtable(dois,
         if r.authors is None:
             paper_PK += 1
             continue
-        sql_cursor.execute('SELECT author_scopus_ID FROM author')
-        curr_scopus_id_list = [a[0] for a in sql_cursor.fetchall()]
         paper_scopus_id_list = [a.auid for a in r.authors]
         for i,scps_id in enumerate(paper_scopus_id_list):
             # if repetitive author, ignore:
@@ -167,6 +168,8 @@ def Scopus_to_SQLtable(dois,
                 sql_cursor.execute('INSERT INTO paper_author_mapping \
                                     VALUES({}, {})'.format(
                                         paper_PK, author_PK))
+                # update the global authors scopus ID list
+                curr_scopus_id_list += [scps_id]
                 author_PK += 1
         paper_PK += 1
 
