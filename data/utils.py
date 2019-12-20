@@ -87,7 +87,14 @@ def Scopus_to_SQLtable(dois,
         author_PK = 0
     else:
         author_PK = max([a[0] for a in all_author_PKs]) + 1
-        
+
+    sql_cursor.execute('SELECT aff_id FROM affiliation;')
+    all_aff_PKs = sql_cursor.fetchall()
+    if len(all_aff_PKs)==0:
+        aff_PK = 0
+    else:
+        aff_PK = max([a[0] for a in all_aff_PKs]) + 1
+
 
 
     # all previously entered paper DOIs to avoid repetition
@@ -95,13 +102,19 @@ def Scopus_to_SQLtable(dois,
     all_dois = sql_cursor.fetchall()
     all_dois = [a[0] for a in all_dois]
     # ... same for authors
-    sql_cursor.execute('SELECT author_scopus_ID FROM author')
+    sql_cursor.execute('SELECT author_scopus_ID FROM author;')
     curr_scopus_id_list = [a[0] for a in sql_cursor.fetchall()]
-
+    sql_cursor.execute('SELECT aff_scopus_ID FROM affiliation;')
+    # ... same for affiliations
+    curr_aff_scopus_id_list = [a[0] for a in sql_cursor.fetchall()]
+    # ... even same for (author, affiliation)'s, since they can be repeatitive
+    sql_cursor.execute('SELECT * FROM author_affiliation_mapping;')
+    curr_author_aff_pairs = list(sql_cursor.fetchall())
+    
     bad_dois = []
     for i,doi in enumerate(dois):
         if doi in all_dois:
-            print('{} is already entered to the database'.format(doi))
+            print('{} has been already entered to the database'.format(doi))
             continue
 
         try:
@@ -168,9 +181,51 @@ def Scopus_to_SQLtable(dois,
                 sql_cursor.execute('INSERT INTO paper_author_mapping \
                                     VALUES({}, {})'.format(
                                         paper_PK, author_PK))
+                
                 # update the global authors scopus ID list
                 curr_scopus_id_list += [scps_id]
+                this_author_PK = author_PK  #this will be used in affiliation table
                 author_PK += 1
+                
+            # adding affiliations
+            # ---------------------
+            # handling None affiliations
+            if r.authors[i].affiliation is not None:
+                author_aff_scopus_id_list = np.unique(r.authors[i].affiliation)
+            else:
+                author_aff_scopus_id_list = []
+            for aff_scps_id in author_aff_scopus_id_list:
+                if aff_scps_id in curr_aff_scopus_id_list:
+                    sql_cursor.execute('SELECT aff_id \
+                    FROM affiliation \
+                    WHERE aff_scopus_ID = {}'.format(aff_scps_id))
+                    this_aff_PK = sql_cursor.fetchall()[0][0]
+
+                    # add the pair only if the author/aff. have not already
+                    # been added to the mapping table
+                    if (this_author_PK, this_aff_PK) not in curr_author_aff_pairs:
+                        sql_cursor.execute('INSERT INTO author_affiliation_mapping \
+                                            VALUES({}, {})'.format(this_author_PK,
+                                                                   this_aff_PK))
+                        curr_author_aff_pairs += [(this_author_PK, this_aff_PK)]
+                else:
+                    lcn = np.where([x.id==aff_scps_id for x in r.affiliation])[0][0]
+                    aff_name = r.affiliation[lcn].name.replace('"','\\"')
+                    sql_cursor.execute('INSERT INTO affiliation \
+                                        VALUES({},"{}","{}","{}","{}");'.format(
+                                            aff_PK,
+                                            aff_scps_id,
+                                            aff_name,
+                                            r.affiliation[lcn].city,
+                                            r.affiliation[lcn].country)
+                                       )
+                    sql_cursor.execute('INSERT INTO author_affiliation_mapping \
+                                        VALUES({}, {})'.format(this_author_PK, aff_PK))
+                    curr_author_aff_pairs += [(this_author_PK, aff_PK)]
+                    # update the affliations list
+                    curr_aff_scopus_id_list += [aff_scps_id]
+                    aff_PK += 1
+
         paper_PK += 1
 
         sql_db.commit()
