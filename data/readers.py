@@ -3,9 +3,11 @@ import sys
 import pdb
 import json
 import pymysql
-
 import numpy as np
 
+path = '/home/jamshid/codes/social-knowledge-analysis/'
+sys.path.insert(0, path)
+from data import utils
 
 class MatScienceDB(object):
 
@@ -239,3 +241,45 @@ class MatScienceDB(object):
         # [A,B] + [(a1,a2), (b1,b2)] --> [(A,(a1,a2)), (B,(b1,b2))]
         # .. and then use column headers to make a dictionary
         return {x[0]:list(x[1]) for x in zip(cols,R)}
+
+
+    def extract_titles_abstracts(self,
+                                 before_year=None,
+                                 em='RAM',
+                                 save_path=None):
+        """Returning titles and abstracts (merged together) as a list
+        of lists (when `em=RAM`) or saving them into lines of a text file
+        (when `em=HARD`). If the latter is specified, a path for saving the text
+        file (`save_path`) should also be provided.
+        """
+
+        # MS text processor
+        self.text_processor = utils.MatTextProcessor()
+
+        if before_year:
+            scomm = 'SELECT title, abstract FROM paper \
+                     WHERE YEAR(date)<{};'.format(before_year)
+        else:
+            scomm = 'SELECT title, abstract FROM paper;'
+        (_,titles), (_,abstracts) = self.execute_and_get_results(scomm, ['title','abstract']).items()
+        
+        if em=='HARD':
+            # processing and saving
+            assert save_path is not None, 'Specify a saving path.'
+
+            with open(save_path, 'a') as f:
+                for i in range(len(titles)):
+                    A = titles[i] + '. ' + abstracts[i]
+                    if 'Inf' in A:
+                        A = A.replace('Inf', 'inf')
+                    prA = ' '.join(sum(self.text_processor.mat_preprocess(A), []))
+                    f.write(prA + '\n')
+
+        elif em=='RAM':
+            texts = []
+            for i in range(len(titles)):
+                A = titles[i] + '. ' + abstracts[i]
+                prA = ' '.join(sum(self.text_processor.mat_preprocess(A), []))
+                texts += [prA]
+            return texts
+        
