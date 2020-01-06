@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import pdb
 
@@ -131,9 +132,19 @@ def Scopus_to_SQLtable(dois,
             
 
         # ROW IN PAPER TABLE
-        title = r.title.replace('\"','')
+        if r.title is not None:
+            title = r.title.replace('\"','')
+            title = title.replace('\\Vub\\', '|Vub|') # ad-hoc for a specific article
+        else:
+            title = 'NA'
         if r.description is not None:
             abst = r.description.replace('\"','')
+            abst = abst.replace('\\Vub\\','|Vub|') # ad-hoc for a specific article
+            abst = abst.replace('out.\\', 'out.')  # ad-hoc for a specific article
+            # yet another ad-hoc
+            if doi=='10.1007/s12633-018-9918-9':
+                abst = re.sub(r'formal potential of E(.*?)= 0.51V',
+                              'formal potential of Eθ= 0.51V', abst)
         else:
             abst = 'NA'
             
@@ -171,13 +182,18 @@ def Scopus_to_SQLtable(dois,
                     paper_PK, this_author_PK))
             else:
                 # create a row for this new author
+                au_given_name = r.authors[i].given_name.replace('\"','') if \
+                    r.authors[i].given_name is not None else r.authors[i].given_name
+                au_surname = r.authors[i].surname.replace('\"','') if \
+                    r.authors[i].surname is not None else r.authors[i].surname
+                
                 sql_cursor.execute('INSERT INTO author \
                                     VALUES({}, "{}", "{}", "{}")'.format(
                                         author_PK,
                                         scps_id,
-                                        r.authors[i].given_name,
-                                        r.authors[i].surname)
-                                   )
+                                        au_given_name,
+                                        au_surname)
+                )
                 sql_cursor.execute('INSERT INTO paper_author_mapping \
                                     VALUES({}, {})'.format(
                                         paper_PK, author_PK))
@@ -209,16 +225,25 @@ def Scopus_to_SQLtable(dois,
                                                                    this_aff_PK))
                         curr_author_aff_pairs += [(this_author_PK, this_aff_PK)]
                 else:
-                    lcn = np.where([x.id==aff_scps_id for x in r.affiliation])[0][0]
-                    aff_name = r.affiliation[lcn].name.replace('"','\\"')
+                    lcn = np.where([x.id==aff_scps_id for x in r.affiliation])[0]
+                    if len(lcn)>0:
+                        lcn = lcn[0]
+                        aff_name = r.affiliation[lcn].name.replace('"','\\"')
+                        aff_city = r.affiliation[lcn].city
+                        aff_country = r.affiliation[lcn].country
+                    else:
+                        aff_name = 'NA'
+                        aff_city = 'NA'
+                        aff_country = 'NA'
+
                     sql_cursor.execute('INSERT INTO affiliation \
                                         VALUES({},"{}","{}","{}","{}");'.format(
                                             aff_PK,
                                             aff_scps_id,
                                             aff_name,
-                                            r.affiliation[lcn].city,
-                                            r.affiliation[lcn].country)
-                                       )
+                                            aff_city,
+                                            aff_country)
+                    )
                     sql_cursor.execute('INSERT INTO author_affiliation_mapping \
                                         VALUES({}, {})'.format(this_author_PK, aff_PK))
                     curr_author_aff_pairs += [(this_author_PK, aff_PK)]
