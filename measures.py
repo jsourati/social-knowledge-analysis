@@ -7,11 +7,14 @@ import pymysql
 import pdb
 import numpy as np
 
+from gensim.models import Word2Vec
+
 path = '/home/jamshid/codes/social-knowledge-analysis'
 sys.path.insert(0, path)
 
 from data import readers
 from misc import helpers
+from training.train import MyCallBack
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
 msdb = readers.MatScienceDB(config_path, 'scopus')
@@ -21,14 +24,17 @@ def cooccurrences(Y_terms, ents, **kwargs):
     """Getting co-occurrences of a given list of entities and 
     a set of keywords (Y-terms) in  abstracts of the database
     """
+
+    msdb.crsr.execute('SELECT COUNT(*) FROM chemical_paper_mapping;')
+    cnt = msdb.crsr.fetchall()[0][0]
+    print('Number of rows in chemical-paper-mapping: {}'.format(cnt))
     
     # setting up the logger
     logger_disable = kwargs.get('logger_disable', False)
     logfile_path =   kwargs.get('logfile_path', None)
     logger = helpers.set_up_logger(__name__, logfile_path, logger_disable)
 
-    pdb.set_trace()
-    # downloading papers with Y-terms (Y-papers) and categorizing them yearwise
+   # downloading papers with Y-terms (Y-papers) and categorizing them yearwise
     logger.info('Downloading papers with terms {} in their abstracts'.format(Y_terms))
     (_,Y_papers), (_,Y_dates) = msdb.get_papers_by_keywords(Y_terms, ['paper_id','date'],'OR').items()
     Y_years = np.array([y.year for y in Y_dates])
@@ -40,19 +46,22 @@ def cooccurrences(Y_terms, ents, **kwargs):
     logger.info('{} papers with Y-terms have been downloaded. \
                  The earliest one is published in {}'.format(len(Y_papers), min_yr))
     cocrs = np.zeros((len(ents), len(yrs)))
+    ents = np.array(ents)
     for i,yr in enumerate(Y_years):
         yr_loc = yr - min_yr
 
         # add co-occurrences to all chemicals present in this paper
         # all chemicals in this paper
         present_ents = msdb.get_chemicals_by_paper_id(int(Y_papers[i]))
-        ent_ids = present_ents['chem_id'] if len(present_ents)>0 else []
-
-        for cid in ent_ids:
-            cocrs[cid, yr_loc] += 1
+        present_ents_formula = present_ents['formula'] if len(present_ents)>0 else []
+        present_ents_formula = list(set(present_ents_formula).intersection(set(ents)))
+        present_ents_locs = [np.where(ents==frml)[0][0] for frml in present_ents_formula]
+        
+        for cloc in present_ents_locs:
+            cocrs[cloc, yr_loc] += 1
             
-            if not(i%1000):
-                logger.info('{} papers is reviewed.'.format(i))
+        if not(i%1000):
+            logger.info('{} papers is reviewed.'.format(i))
 
     return cocrs, yrs
 
@@ -163,3 +172,39 @@ def SD_metrics(yr_SDs, mtype='SUM', **kwargs):
         scores = np.sum(yr_SDs[:, -memory:], axis=1)
 
     return scores
+
+def cosine_sims(model, chems, Y_term):
+    """
+    Note the following vectors in a gensim's word2vec model:
+
+    model.wv.vectors, model.wv.syn0 and model.wv[word]:
+        all these three give word embedding vectors, the first two use
+        word indices and the last use the word's in string format to
+        return the embedding vector
+        ---SANITY CHECK---
+        these three vectors are the same:
+        model.wv.vectors[i,:], model.wv.syn0[i,:], model.wv[model.wv.index2word[i]]
+
+    model.wv.trainables.syn1neg:
+        output embedding used in negative sampling (take index, not string value)
+
+    model.wv.trainables.syn1:
+        output embedding used in heirarchical softmax
+    """
+
+    zw_y = model.wv[Y_term]
+    zw_y = zw_y / np.sqrt(np.sum(zw_y**2))
+    
+    sims = -1.*np.ones(len(chems))
+    for i,chm in enumerate(chems):
+        if chm not in model.wv.vocab:
+            continue
+
+        idx = model.wv.vocab[chm].index
+        zo_x = model.trainables.syn1neg[idx,:]
+        #zo_x = model.wv[chm]
+        zo_x = zo_x / np.sqrt(np.sum(zo_x**2))
+
+        sims[i] = np.dot(zw_y, zo_x)
+
+    return sims
