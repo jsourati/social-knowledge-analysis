@@ -142,9 +142,9 @@ def Scopus_to_SQLtable(dois,
             abst = abst.replace('\\Vub\\','|Vub|') # ad-hoc for a specific article
             abst = abst.replace('out.\\', 'out.')  # ad-hoc for a specific article
             # yet another ad-hoc
-            if doi=='10.1007/s12633-018-9918-9':
-                abst = re.sub(r'formal potential of E(.*?)= 0.51V',
-                              'formal potential of Eθ= 0.51V', abst)
+            if doi=='10.1140/epjb/e2012-30482-6':
+                abst = re.sub(r'-duration(.*?), among others',
+                              '-duration α, among others',abst)
         else:
             abst = 'NA'
             
@@ -258,3 +258,94 @@ def Scopus_to_SQLtable(dois,
     return bad_dois
 
     
+def complete_affiliations(till_paper_id, sql_db, sql_cursor):
+
+    # initialize the affiliation primary key
+    sql_cursor.execute('SELECT aff_id FROM affiliation;')
+    all_aff_PKs = sql_cursor.fetchall()
+    if len(all_aff_PKs)==0:
+        aff_PK = 0
+    else:
+        aff_PK = max([a[0] for a in all_aff_PKs]) + 1
+        
+    sql_cursor.execute('SELECT aff_scopus_ID FROM affiliation;')
+    curr_aff_scopus_id_list = [a[0] for a in sql_cursor.fetchall()]
+    sql_cursor.execute('SELECT * FROM author_affiliation_mapping;')
+    curr_author_aff_pairs = list(sql_cursor.fetchall())
+
+    sql_cursor.execute('SELECT doi FROM paper WHERE paper_id<{};'.format(till_paper_id))
+    dois = [a[0] for a in sql_cursor.fetchall()]
+
+    for j,doi in enumerate(dois):
+        try:
+            r = AbstractRetrieval(doi)
+        except Scopus429Error:
+            print('Scopus resource exhausted. Check your quota.')
+            return
+        except:
+            raise ValueError('Could not download doi {}'.format(doi))
+        
+        if r.authors is None:
+            continue
+        
+        paper_scopus_id_list = [a.auid for a in r.authors]
+        for i,scps_id in enumerate(paper_scopus_id_list):
+            # if repetitive author, ignore:
+            if scps_id in paper_scopus_id_list[:i]:
+                continue
+
+            sql_cursor.execute('SELECT author_id \
+                                FROM author \
+                                WHERE author_scopus_ID = {}'.format(scps_id))
+            this_author_PK = sql_cursor.fetchall()[0][0]
+
+            # directly go to their affiliations
+            if r.authors[i].affiliation is not None:
+                author_aff_scopus_id_list = np.unique(r.authors[i].affiliation)
+            else:
+                author_aff_scopus_id_list = []
+                
+            for aff_scps_id in author_aff_scopus_id_list:
+                if aff_scps_id in curr_aff_scopus_id_list:
+                    sql_cursor.execute('SELECT aff_id \
+                    FROM affiliation \
+                    WHERE aff_scopus_ID = {}'.format(aff_scps_id))
+                    this_aff_PK = sql_cursor.fetchall()[0][0]
+
+                    # add the pair only if the author/aff. have not already
+                    # been added to the mapping table
+                    if (this_author_PK, this_aff_PK) not in curr_author_aff_pairs:
+                        sql_cursor.execute('INSERT INTO author_affiliation_mapping \
+                                            VALUES({}, {})'.format(this_author_PK,
+                                                                   this_aff_PK))
+                        curr_author_aff_pairs += [(this_author_PK, this_aff_PK)]
+                else:
+                    lcn = np.where([x.id==aff_scps_id for x in r.affiliation])[0]
+                    if len(lcn)>0:
+                        lcn = lcn[0]
+                        aff_name = r.affiliation[lcn].name.replace('"','\\"')
+                        aff_city = r.affiliation[lcn].city
+                        aff_country = r.affiliation[lcn].country
+                    else:
+                        aff_name = 'NA'
+                        aff_city = 'NA'
+                        aff_country = 'NA'
+
+                    sql_cursor.execute('INSERT INTO affiliation \
+                                        VALUES({},"{}","{}","{}","{}");'.format(
+                                            aff_PK,
+                                            aff_scps_id,
+                                            aff_name,
+                                            aff_city,
+                                            aff_country)
+                    )
+                    sql_cursor.execute('INSERT INTO author_affiliation_mapping \
+                                        VALUES({}, {})'.format(this_author_PK, aff_PK))
+                    curr_author_aff_pairs += [(this_author_PK, aff_PK)]
+                    # update the affliations list
+                    curr_aff_scopus_id_list += [aff_scps_id]
+                    aff_PK += 1
+
+        if not(j%1000):
+            np.savetxt('/home/jamshid/codes/data/iter_inds.txt', [j])
+        sql_db.commit()
