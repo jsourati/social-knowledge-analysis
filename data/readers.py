@@ -125,7 +125,7 @@ class MatScienceDB(object):
                  FROM paper P \
                  INNER JOIN chemical_paper_mapping C2P \
                  ON P.paper_id=C2P.paper_id \
-                 INNER JOIN chemicals C \
+                 INNER JOIN chemical C \
                  ON C2P.chem_id=C.chem_id \
                  WHERE C.formula IN {}'.format(pcols, chems_array_str)
 
@@ -147,7 +147,7 @@ class MatScienceDB(object):
                  ON P2A.author_id=A.author_id \
                  INNER JOIN chemical_paper_mapping C2P \
                  ON C2P.paper_id=P2A.paper_id \
-                 INNER JOIN chemicals C \
+                 INNER JOIN chemical C \
                  ON C.chem_id=C2P.chem_id \
                  WHERE C.formula IN {};'.format(pcols, chems_array_str)
 
@@ -162,7 +162,7 @@ class MatScienceDB(object):
         if type(paper_ids) is int:
             # single paper ID
             scomm = 'SELECT C.chem_id, C.formula \
-                     FROM chemicals C \
+                     FROM chemical C \
                      INNER JOIN chemical_paper_mapping C2P \
                      ON C2P.chem_id=C.chem_id \
                      WHERE C2P.paper_id={}'.format(paper_ids)
@@ -170,7 +170,7 @@ class MatScienceDB(object):
             # a list of paper IDs
             ID_list_str = '({})'.format(', '.join([str(a) for a in paper_ids]))
             scomm = 'SELECT C.chem_id, C.formula \
-                     FROM chemicals C \
+                     FROM chemical C \
                      INNER JOIN chemical_paper_mapping C2P \
                      ON C2P.chem_id=C.chem_id \
                      WHERE C2P.paper_id IN {}'.format(ID_list_str)
@@ -262,7 +262,7 @@ class MatScienceDB(object):
         else:
             scomm = 'SELECT title, abstract FROM paper;'
         (_,titles), (_,abstracts) = self.execute_and_get_results(scomm, ['title','abstract']).items()
-        
+
         if em=='HARD':
             # processing and saving
             assert save_path is not None, 'Specify a saving path.'
