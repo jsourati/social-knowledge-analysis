@@ -65,6 +65,34 @@ def cooccurrences(Y_terms, ents, **kwargs):
 
     return cocrs, yrs
 
+def yearwise_authors_IOU(X,Y, x_chemical=True,y_chemical=False):
+    """Returning author intersection of union for different years
+
+    The years are going to be based on the dates of the Y-related papers
+    """
+
+    if isinstance(Y, list):
+        Y_authors = msdb.get_yearwise_authors_by_keywords(Y, y_chemical)
+    else:
+        Y_authors = Y
+    y_yrs = list(Y_authors.keys())
+    
+    if isinstance(X, list):
+        X_authors = msdb.get_yearwise_authors_by_keywords(X,
+                                                          x_chemical,
+                                                          min_yr=np.min(y_yrs),
+                                                          max_yr=np.max(y_yrs))
+    elif isinstance(X,dict):
+        X_authors = X
+        X.update({key: [] for key in Y_authors if key not in X_authors})
+
+    overlap_dict = {}
+    for yr, Y_auths in Y_authors.items():
+        X_auths = X_authors[yr]
+        overlap_dict[yr] = list(set(Y_auths).intersection(set(X_auths)))
+
+    return overlap_dict
+
 
 def SD(Y_terms, chems, **kwargs):
     """Returning overall and year-wise Social Density (SD) values for a set

@@ -282,4 +282,39 @@ class MatScienceDB(object):
                 prA = ' '.join(sum(self.text_processor.mat_preprocess(A), []))
                 texts += [prA]
             return texts
+
+    def get_yearwise_authors_by_keywords(self, terms,
+                                         chemical=False,
+                                         min_yr=None,
+                                         max_yr=None):
+
+        if chemical:
+            res_dict = self.get_papers_by_chemicals(terms, ['paper_id','date'])
+        else:
+            res_dict = self.get_papers_by_keywords(terms, ['paper_id','date'], 'OR')
+
+
+        if len(res_dict)>0:
+            (_,papers), (_,dates) = res_dict.items()
+        else:
+            return {}
+
+        dates_yrs = np.array([d.year for d in dates])
+        if min_yr is None:    
+            min_yr = np.min(dates_yrs)
+        if max_yr is None:
+            max_yr = np.max(dates_yrs)
+
+        yr_authors = {yr: [] for yr in np.arange(min_yr,max_yr+1)}
+
+        for yr in np.arange(min_yr, max_yr+1):
+            yr_papers = [papers[i] for i in np.where(dates_yrs==yr)[0]]
+            if len(yr_papers)>0:
+                auths = self.get_authors_by_paper_id(yr_papers, ['author_id'])
+                # taking care of author-less papers
+                if len(auths)>0:
+                    yr_authors[yr] = list(np.unique(auths['author_id']))
+
+        return yr_authors
+
         
