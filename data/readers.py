@@ -286,8 +286,13 @@ class MatScienceDB(object):
     def get_yearwise_authors_by_keywords(self, terms,
                                          chemical=False,
                                          min_yr=None,
-                                         max_yr=None):
+                                         max_yr=None,
+                                         return_papers=True):
 
+
+        # For chemicals, we could get X-authors directly, but since we want to
+        # compute year-wise SDs, we will first get X-papers and their dates
+        # and then get their authors
         if chemical:
             res_dict = self.get_papers_by_chemicals(terms, ['paper_id','date'])
         else:
@@ -315,6 +320,12 @@ class MatScienceDB(object):
                 if len(auths)>0:
                     yr_authors[yr] = list(np.unique(auths['author_id']))
 
-        return yr_authors
+        if return_papers:
+            papers_dates_dict = {}
+            for yr in np.arange(min_yr, max_yr+1):
+                papers_dates_dict[yr] = list(np.array(papers)[dates_yrs==yr])
+            return yr_authors, papers_dates_dict
+        else:
+            return yr_authors
 
         

@@ -113,28 +113,22 @@ def SD(Y_terms, chems, **kwargs):
 
     # downloading papers with Y-terms (Y-papers) and 
     # categorizing them yearwise
-    logger.info('Downloading papers with terms {} in their abstracts'.format(Y_terms))
-    (_,Y_papers), (_,Y_dates) = msdb.get_papers_by_keywords(Y_terms, ['paper_id','date'],'OR').items()
-    Y_years = np.array([y.year for y in Y_dates])
-    Y_distinct_yrs = np.unique(Y_years)
-    min_yr = np.min(Y_years)
-    end_yr = 2019
+    logger.info('Downloading authors for terms {} in their abstracts'.format(Y_terms))
+    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms)
+    unique_Y_authors = np.unique(sum([val for _,val in Y_authors.items()],[]))
+    min_yr = np.min(list(Y_authors.keys()))
+    max_yr = np.max(list(Y_authors.keys()))
+    logger.info('Downloading is done. The oldest paper is published in {}.'.format(min_yr))
+    logger.info('The total number of unique authots is {}.'.format(len(unique_Y_authors)))
 
-    logger.info('Downloading is done. The oldest paper downloaded is for {}. \
-                  Now, extracting year-wise authors of the papers with Y-terms.'.format(min_yr))
-    yr_Y_authors = {}
-    for yr in np.arange(min_yr, end_yr+1):
-        year_papers = [Y_papers[i] for i in np.where(Y_years==yr)[0]]
-        if len(year_papers)==0:
-            continue
-        yr_Y_authors[yr] = np.unique(msdb.get_authors_by_paper_id(year_papers,['author_id'])['author_id'])
-
-    all_Y_authors = sum([list(a) for _,a in yr_Y_authors.items()], [])
+    # but we only need those years where there exist non-zero set of Y-authors
+    # otherwise, the SD will be zero no matter how many X-authors we get
+    nnz_Y_yrs = [key for key, val in Y_authors.items() if len(val)>0]
 
     # iterating over chemicals and compute SD for each
     SDs = np.zeros(len(chems))
-    yr_SDs = np.zeros((len(chems), end_yr-min_yr+1))
-    years = np.arange(min_yr, end_yr+1)
+    yr_SDs = np.zeros((len(chems), max_yr-min_yr+1))
+    years = np.arange(min_yr, max_yr+1)
     save_dirname = kwargs.get('save_dirname', None)
     logger.info('Iterating over chemicals for computing social densities began.')
     for i, chm in enumerate(chems):
@@ -144,40 +138,15 @@ def SD(Y_terms, chems, **kwargs):
                 np.savetxt(os.path.join(save_dirname, 'SDs.txt'), SDs)
                 np.savetxt(os.path.join(save_dirname, 'yr_SDs.txt'), yr_SDs)
 
-        # we could get X-authors by chemicals directly, but since we want to
-        # compute year-wise SDs, we will first get X-papers and their dates
-        # and then get their authors
-        X = msdb.get_papers_by_chemicals([chm],['paper_id', 'date'])
-        if len(X)>0:
-            X_papers = X['paper_id']
-            X_years  = [x.year for x in X['date']]
-        else:
-            # no papers for X in this year? skip the rest
-            continue
-
-        # years when there were papers published on X
-        X_distinct_yrs = np.unique(X_years)
+        X_authors = msdb.get_yearwise_authors_by_keywords([chm], chemical=True)
+        overlap_dict = yearwise_authors_IOU(X_authors, Y_authors)
+        for yr in nnz_Y_yrs:
+            yr_SDs[i,yr-min_yr] = 2*len(overlap_dict[yr])/(len(Y_authors[yr])+len(X_authors[yr]))
         
-        all_X_authors = []
-        for yr in X_distinct_yrs:
-            year_papers = [X_papers[i] for i in np.where(X_years==yr)[0]]
-            AUTHS = msdb.get_authors_by_paper_id(year_papers, ['author_id'])
-            
-            # take care of auther-less articles in the database
-            if len(AUTHS)>0:
-                year_authors = np.unique(AUTHS['author_id'])
-            else:
-                continue
-            
-            all_X_authors += list(year_authors)
-            
-            if yr in Y_distinct_yrs:
-                overlap = set(yr_Y_authors[yr]).intersection(set(year_authors))
-                yr_SDs[i, yr-min_yr] = 2*len(overlap) / (len(year_authors) + len(yr_Y_authors[yr]))
-                
         # overall SD
-        overlap = set(all_Y_authors).intersection(set(all_X_authors))
-        SDs[i] = 2*len(overlap) / (len(all_Y_authors)+len(all_X_authors))
+        unique_X_authors = np.unique(sum([val for _,val in X_authors.items()],[]))
+        overlap = set(unique_Y_authors).intersection(set(unique_X_authors))
+        SDs[i] = 2*len(overlap) / (len(unique_Y_authors)+len(unique_X_authors))
 
     return SDs, yr_SDs, years
 
