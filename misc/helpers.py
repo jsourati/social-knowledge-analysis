@@ -4,7 +4,7 @@ import copy
 import logging
 import numpy as np
 
-def set_up_logger(log_name, logfile_path, logger_disable):
+def set_up_logger(log_name, logfile_path, logger_disable, file_mode='w'):
     """Setting up handler of the "root" logger as the single main logger
     """
     
@@ -17,7 +17,7 @@ def set_up_logger(log_name, logfile_path, logger_disable):
         logger.setLevel(logging.INFO)
         handler = logging.FileHandler(filename=logfile_path,
                                       encoding='utf-8',
-                                      mode='w')
+                                      mode=file_mode)
     handler.setFormatter(logging.Formatter("%(asctime)s : %(levelname)s : %(message)s"))
     logger.handlers = []
     logger.addHandler(handler)

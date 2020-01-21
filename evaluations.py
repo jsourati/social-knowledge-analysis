@@ -131,7 +131,7 @@ def compare_emb_SD(model_paths_dict,
         logger.info(yr_string+'extracting chemicals from the vocabulary of the model without count thresholds.'.format(yr))
         model_chems = []
         for w in model.wv.index2word:
-            if pr.is_simple_formula(w) and model.wv.vocab[w].count>3:
+            if pr.is_simple_formula(w): #and model.wv.vocab[w].count>3:
                 if (pr.normalized_formula(w)==w) or (w in ['H2','O2','N2']):
                     model_chems += [w]
         logger.info(yr_string+'there are {} chemicals extracted.'.format(len(model_chems)))
@@ -168,8 +168,8 @@ def compare_emb_SD(model_paths_dict,
             accs[i,:] = np.cumsum(ranking_scores_acc(scores,
                                                      sub_cocrs[unstudied_ents,:],
                                                      yr_loc))
-        accs_dict[yr] = accs
-        xvals_dict[yr] = np.arange(1,len(yrs)-yr_loc+1)
+        accs_dict[str(yr)] = accs.tolist()
+        xvals_dict[str(yr)] = list([int(x) for x in np.arange(1,len(yrs)-yr_loc+1)])
 
     return xvals_dict, accs_dict
         
