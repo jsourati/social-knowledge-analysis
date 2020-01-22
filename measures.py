@@ -168,6 +168,18 @@ def SD_metrics(yr_SDs, mtype='SUM', **kwargs):
         memory = kwargs.get('memory', 5)
         scores = np.sum(yr_SDs[:, -memory:], axis=1)
 
+    if mtype=='RANDOM':
+        """In random selection, we randomly select some samples from those
+        with non-zero SD signal in the period determined with the memory.
+        The scores will be one for the selected samples and zero elsewhere
+        """
+        memory = kwargs.get('memory', 5)
+        random_selection_size = kwargs.get('random_selection_size', 50)
+        scores = np.zeros(yr_SDs.shape[0])
+        nnz_idx = np.where(np.sum(yr_SDs[:,-memory:], axis=1)>0)[0]
+        rand_sel = nnz_idx[np.random.permutation(len(nnz_idx))[:random_selection_size]]
+        scores[rand_sel] = 1.
+
     return scores
 
 def cosine_sims(model, chems, Y_term):
