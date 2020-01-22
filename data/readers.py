@@ -2,12 +2,14 @@ import os
 import sys
 import pdb
 import json
+import pickle
 import pymysql
 import numpy as np
 
 path = '/home/jamshid/codes/social-knowledge-analysis/'
 sys.path.insert(0, path)
 from data import utils
+from misc.helpers import set_up_logger, find_first_time_cocrs
 
 class MatScienceDB(object):
 
@@ -329,3 +331,84 @@ class MatScienceDB(object):
             return yr_authors
 
         
+    def collect_authors_new_discoveries(self, full_chems,
+                                        cocrs,
+                                        yr_SDs,
+                                        Y_terms,
+                                        yrs,
+                                        logfile_path=None,
+                                        savefile_path=None):
+        """Collecting authors of papers with new co-occurrences (new discoveries)
+        and extracting their previous papers on the topic of the property and/or
+        the newly studied molecule
+        """
+
+        logger = set_up_logger(__name__,logfile_path,False)
+
+        yr_Y_authors, yr_Y_papers = self.get_yearwise_authors_by_keywords(
+            Y_terms, return_papers=True)
+
+        # analyze years from 2001 to 2018 (yrs[-1]=2019)
+        start_yr = 2001
+        disc_dict = {}
+        for yr in np.arange(start_yr, yrs[-1]):
+            yr_loc = np.where(yrs==yr)[0][0]
+            thisyr_Y_papers = yr_Y_papers[yr]
+
+            disc_dict[yr] = {}
+            new_discs = find_first_time_cocrs(cocrs, yr_loc)
+            logger.info('PROGRESS FOR {}: {} new discoveries found'.format(yr,len(new_discs)))
+            for i,chm in enumerate(full_chems[new_discs]):
+                yr_X_authors, yr_X_papers = self.get_yearwise_authors_by_keywords(
+                    [chm], chemical=True, return_papers=True)
+                thisyr_X_papers = yr_X_papers[yr]
+
+                # papers with co-occurrences
+                ov_papers = list(set(thisyr_Y_papers).intersection(set(thisyr_X_papers)))
+                disc_dict[yr][chm] = {pid:{} for pid in ov_papers}
+                for pid in ov_papers:
+                    # authors of papers with co-occurrences
+                    A = self.get_authors_by_paper_id([pid],['author_id'])
+                    if len(A)>0: A=A['author_id']
+                    disc_dict[yr][chm][pid]  = {a:[{},{}] for a in A}
+
+                    for auth in A:
+                        """ for the property """
+                        # years that the current author has published a paper on Y so that ..
+                        a_pubY_yrs = [y for y in yr_Y_authors if auth in yr_Y_authors[y] and y<yr]
+                        if len(a_pubY_yrs)>0:
+                            # .. we can consider only those years to query his/her papers
+                            array_yrs = '({})'.format(','.join([str(y) for y in a_pubY_yrs]))
+                            scomm = 'SELECT P.paper_id, YEAR(P.date) FROM paper P \
+                                     INNER JOIN paper_author_mapping P2A ON P.paper_id=P2A.paper_id \
+                                     WHERE P2A.author_id={} AND (YEAR(P.date) IN {})'.format(auth, array_yrs)
+                            # Pa and Ya are the papers and years of those papers
+                            (_,Pa),(_,Ya) = self.execute_and_get_results(scomm,['paper_id','year']).items()
+                            uYa = np.unique(Ya)
+                            disc_dict[yr][chm][pid][auth][0] = {yr: [Pa[i] for i in range(len(Pa))
+                                                                     if Ya[i]==yr
+                                                                     if Pa[i] in yr_Y_papers[yr]] for yr in uYa}
+                            
+                            
+                        """ for the molecule """
+                        a_pubX_yrs = [x for x in yr_X_authors if auth in yr_X_authors[x] and x<yr]
+                        if len(a_pubX_yrs)>0:
+                            array_yrs = '({})'.format(','.join([str(x) for x in a_pubX_yrs]))
+                            scomm = 'SELECT P.paper_id, YEAR(P.date) FROM paper P \
+                                     INNER JOIN paper_author_mapping P2A ON P.paper_id=P2A.paper_id \
+                                     WHERE P2A.author_id={} AND (YEAR(P.date) IN {})'.format(auth, array_yrs)
+                            (_,Pa),(_,Ya) = self.execute_and_get_results(scomm,['paper_id','year']).items()
+                            uYa = np.unique(Ya)
+                            disc_dict[yr][chm][pid][auth][1] = {yr: [Pa[i] for i in range(len(Pa))
+                                                                     if Ya[i]==yr
+                                                                     if Pa[i] in yr_X_papers[yr]] for yr in uYa}
+                            
+                if i>0 and not(i%100):
+                    logger.info('\t{} materials have been analyzed'.format(i))
+
+            if savefile_path is not None:
+                with open(savefile_path, 'wb') as f:
+                    pickle.dump(disc_dict, f)
+                logger.info('The results have been saved in {}'.format(savefile_path))
+                
+        return disc_dict
