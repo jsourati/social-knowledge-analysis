@@ -114,7 +114,7 @@ def SD(Y_terms, chems, **kwargs):
     # downloading papers with Y-terms (Y-papers) and 
     # categorizing them yearwise
     logger.info('Downloading authors for terms {} in their abstracts'.format(Y_terms))
-    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms)
+    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms, return_papers=False)
     unique_Y_authors = np.unique(sum([val for _,val in Y_authors.items()],[]))
     min_yr = np.min(list(Y_authors.keys()))
     max_yr = np.max(list(Y_authors.keys()))
@@ -138,7 +138,7 @@ def SD(Y_terms, chems, **kwargs):
                 np.savetxt(os.path.join(save_dirname, 'SDs.txt'), SDs)
                 np.savetxt(os.path.join(save_dirname, 'yr_SDs.txt'), yr_SDs)
 
-        X_authors = msdb.get_yearwise_authors_by_keywords([chm], chemical=True)
+        X_authors = msdb.get_yearwise_authors_by_keywords([chm], chemical=True, return_papers=False)
         overlap_dict = yearwise_authors_IOU(X_authors, Y_authors)
         for yr in nnz_Y_yrs:
             yr_SDs[i,yr-min_yr] = 2*len(overlap_dict[yr])/(len(Y_authors[yr])+len(X_authors[yr]))
