@@ -11,7 +11,10 @@ sys.path.insert(0, path)
 
 import measures
 from misc import helpers
-from data import utils
+from data import utils, readers
+
+config_path = '/home/jamshid/codes/data/sql_config_0.json'
+msdb = readers.MatScienceDB(config_path, 'scopus')
 
 def ranking_scores_acc(scores, cocrs, yridx, k=50):
     """Returning the accuracy of predicting co-occurrence of a pair of
@@ -70,14 +73,15 @@ def average_accs_dict(accs_dict, stat='mean'):
     return np.array(stats)
 
 
-def compare_emb_SD(model_paths_dict,
-                   cocrs_path,
-                   yr_SDs_path,
-                   full_chems_path,
-                   yrs_path,
-                   y_term,
-                   memory,
-                   logfile_path=None):
+def compare_emb_yrSD(model_paths_dict,
+                     cocrs_path,
+                     yr_SDs_path,
+                     full_chems_path,
+                     yrs_path,
+                     y_term,
+                     memory,
+                     sd_score_type='SUM',
+                     logfile_path=None):
     """Comparing embedding- and SD-based scoring functions in predicting
     co-occurrence
 
@@ -128,10 +132,10 @@ def compare_emb_SD(model_paths_dict,
         model = Word2Vec.load(model_path)
 
         # extract chemicals from the vocabulary of the model
-        logger.info(yr_string+'extracting chemicals from the vocabulary of the model without count thresholds.'.format(yr))
+        logger.info(yr_string+'extracting chemicals from the vocabulary of the model with count thresholds.'.format(yr))
         model_chems = []
         for w in model.wv.index2word:
-            if pr.is_simple_formula(w): #and model.wv.vocab[w].count>3:
+            if pr.is_simple_formula(w) and model.wv.vocab[w].count>3:
                 if (pr.normalized_formula(w)==w) or (w in ['H2','O2','N2']):
                     model_chems += [w]
         logger.info(yr_string+'there are {} chemicals extracted.'.format(len(model_chems)))
@@ -155,7 +159,9 @@ def compare_emb_SD(model_paths_dict,
 
         # computing the scores
         embedd_scores = measures.cosine_sims(model, model_chems[unstudied_ents], y_term)
-        sd_scores = measures.SD_metrics(sub_yr_SDs[unstudied_ents, :yr_loc], memory=memory)
+        sd_scores = measures.SD_metrics(sub_yr_SDs[unstudied_ents, :yr_loc],
+                                        mtype=sd_score_type,
+                                        memory=memory)
 
         gamma = np.abs(np.mean(embedd_scores) / (np.mean(sd_scores[sd_scores>0])))
         logger.info(yr_string+'gamma coefficient computed: {}'.format(gamma))
@@ -174,4 +180,68 @@ def compare_emb_SD(model_paths_dict,
     return xvals_dict, accs_dict
         
         
+def eval_collective_SD(model_paths_dict,
+                       cocrs,
+                       yrs,
+                       full_chems,
+                       Y_terms,
+                       logfile_path=None):
     
+    logger = helpers.set_up_logger(__name__, logfile_path, False)
+
+    pr = utils.MaterialsTextProcessor()
+
+    # getting the yearwise Y-authors
+    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms, return_papers=False)
+    
+    xvals_dict = {}
+    accs_dict = {}
+    for yr, model_path in model_paths_dict.items():
+        logger.info('Start computing scores for year {}'.format(yr))
+        yr_string = 'PROGRESS FOR {}: '.format(yr)
+        model = Word2Vec.load(model_path)
+
+        # extract chemicals from the vocabulary of the model
+        logger.info(yr_string+'extracting chemicals from the vocabulary of the model with count thresholds.'.format(yr))
+        model_chems = []
+        for w in model.wv.index2word:
+            if pr.is_simple_formula(w) and model.wv.vocab[w].count>3:
+                if (pr.normalized_formula(w)==w) or (w in ['H2','O2','N2']):
+                    model_chems += [w]
+        logger.info(yr_string+'there are {} chemicals extracted.'.format(len(model_chems)))
+
+        # get the intersection between the extracted chemicals and the full set
+        logger.info(yr_string+'there are {} chemicals removed from model chemicals because they were missing in the full chemical set'.format(len(set(model_chems)-set(full_chems))))
+        model_chems = list(set(model_chems).intersection(set(full_chems)))
+        model_chems_indic_in_full = np.in1d(full_chems, np.array(model_chems))
+        # this is the actual order of materials we will consider in model chemicals
+        model_chems = full_chems[model_chems_indic_in_full]
+        logger.info(yr_string+'number of total chemicals after correction: {}'.format(len(model_chems)))
+
+        # get the submatrices corresponding to the corrected set of chemicals
+        sub_cocrs  = cocrs[model_chems_indic_in_full,:]
+
+        # take materials unstudied until year yr
+        yr_loc = np.where(yrs==yr)[0][0]
+        unstudied_idx = np.where(np.sum(sub_cocrs[:,:yr_loc],axis=1)==0)[0]
+
+        # get unique authors of Y-terms for all years<yr
+        Yset = np.unique(sum([vals for y,vals in Y_authors.items() if y<yr],[]))
+        
+        # computing scores for unstudied samples
+        sd_scores = np.zeros(len(unstudied_idx))
+        for i,chm in enumerate(full_chems[unstudied_idx]):
+            # all authors published on x
+            X_authors = msdb.get_yearwise_authors_by_keywords([chm],chemical=True,return_papers=False)
+            # only those authors published on X before years<yr
+            Xset = np.unique(sum([vals for y,vals in X_authors.items() if y<yr],[]))
+            overlap = set(Xset).intersection(set(Yset))
+            sd_scores[i] = 2*len(overlap) / (len(Yset)+len(Xset))
+
+        accs = np.cumsum(ranking_scores_acc(sd_scores,
+                                            sub_cocrs[unstudied_idx,:],
+                                            yr_loc))
+        accs_dict[str(yr)] = accs
+        xvals_dict[str(yr)] = list([int(x) for x in np.arange(1,len(yrs)-yr_loc+1)])
+
+    return xvals_dict, accs_dict
