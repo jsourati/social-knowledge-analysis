@@ -179,16 +179,26 @@ class MatScienceDB(object):
             
         return self.execute_and_get_results(scomm, ['chem_id', 'formula'])
 
-    def get_papers_by_keywords(self, keywords, cols=None, logical_comb='OR'):
+    def get_papers_by_keywords(self, keywords,
+                               cols=None,
+                               logical_comb='OR',
+                               case_sensitives=[]):
         """Returning papers that have the given list of keywords. 
 
         The logical combination (`logical_comb`) input specifies if
         the papers should have all the keywords at the same time (AND)
         or just having one of the keywords suffices (OR).
+
+        The list `case_sensitives` also includes the keywords that needs to
+        be searched in a case-sensitive fashion. 
         """
 
         cols, pcols = self.prepare_column_headers(cols, 'P')
         constraints_str = ['P.abstract LIKE "%{}%"'.format(k) for k in keywords]
+        for k in case_sensitives:
+            idx = np.where([x==k for x in keywords])
+            idx = [] if len(idx)==0 else idx[0][0]
+            constraints_str[idx] = 'P.abstract LIKE BINARY "%{}%"'.format(k)
         constraints_str = ' {} '.format(logical_comb).join(constraints_str)
 
         scomm = 'SELECT {} \
@@ -289,7 +299,8 @@ class MatScienceDB(object):
                                          chemical=False,
                                          min_yr=None,
                                          max_yr=None,
-                                         return_papers=True):
+                                         return_papers=True,
+                                         case_sensitives=[]):
 
 
         # For chemicals, we could get X-authors directly, but since we want to
@@ -298,7 +309,10 @@ class MatScienceDB(object):
         if chemical:
             res_dict = self.get_papers_by_chemicals(terms, ['paper_id','date'])
         else:
-            res_dict = self.get_papers_by_keywords(terms, ['paper_id','date'], 'OR')
+            res_dict = self.get_papers_by_keywords(terms,
+                                                   ['paper_id','date'],
+                                                   'OR',
+                                                   case_sensitives)
 
 
         if len(res_dict)>0:
@@ -336,6 +350,7 @@ class MatScienceDB(object):
                                         yr_SDs,
                                         Y_terms,
                                         yrs,
+                                        case_sensitives=[],
                                         logfile_path=None,
                                         savefile_path=None):
         """Collecting authors of papers with new co-occurrences (new discoveries)
@@ -346,9 +361,9 @@ class MatScienceDB(object):
         logger = set_up_logger(__name__,logfile_path,False)
 
         yr_Y_authors, yr_Y_papers = self.get_yearwise_authors_by_keywords(
-            Y_terms, return_papers=True)
+            Y_terms, return_papers=True, case_sensitives=case_sensitives)
 
-        # analyze years from 2001 to 2018 (yrs[-1]=2019)
+        # analyze years from 2001 to 2018 (note that: yrs[-1]=2019)
         start_yr = 2001
         disc_dict = {}
         for yr in np.arange(start_yr, yrs[-1]):

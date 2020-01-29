@@ -36,7 +36,11 @@ def cooccurrences(Y_terms, ents, **kwargs):
 
    # downloading papers with Y-terms (Y-papers) and categorizing them yearwise
     logger.info('Downloading papers with terms {} in their abstracts'.format(Y_terms))
-    (_,Y_papers), (_,Y_dates) = msdb.get_papers_by_keywords(Y_terms, ['paper_id','date'],'OR').items()
+    case_sensitives = kwargs.get('case_sensitives', [])
+    (_,Y_papers), (_,Y_dates) = msdb.get_papers_by_keywords(Y_terms,
+                                                            ['paper_id','date'],
+                                                            'OR',
+                                                            case_sensitives).items()
     Y_years = np.array([y.year for y in Y_dates])
     Y_distinct_yrs = np.unique(Y_years)
     min_yr = np.min(Y_years)
@@ -94,7 +98,7 @@ def yearwise_authors_IOU(X,Y, x_chemical=True,y_chemical=False):
     return overlap_dict
 
 
-def SD(Y_terms, chems, **kwargs):
+def yearwise_SD(Y_terms, chems, **kwargs):
     """Returning overall and year-wise Social Density (SD) values for a set
     of chemical compounds and a set of properties (Y-terms)
 
@@ -111,22 +115,23 @@ def SD(Y_terms, chems, **kwargs):
         msdb.crsr.fetchall()[0][0]))
 
 
-    # downloading papers with Y-terms (Y-papers) and 
-    # categorizing them yearwise
+    # getting unique authors of Y-terms in different years
+    case_sensitives = kwargs.get('case_sensitives',[])
     logger.info('Downloading authors for terms {} in their abstracts'.format(Y_terms))
-    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms, return_papers=False)
+    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms,
+                                                      return_papers=False,
+                                                      case_sensitives=case_sensitives)
     unique_Y_authors = np.unique(sum([val for _,val in Y_authors.items()],[]))
     min_yr = np.min(list(Y_authors.keys()))
     max_yr = np.max(list(Y_authors.keys()))
     logger.info('Downloading is done. The oldest paper is published in {}.'.format(min_yr))
-    logger.info('The total number of unique authots is {}.'.format(len(unique_Y_authors)))
+    logger.info('The total number of unique authors is {}.'.format(len(unique_Y_authors)))
 
     # but we only need those years where there exist non-zero set of Y-authors
     # otherwise, the SD will be zero no matter how many X-authors we get
     nnz_Y_yrs = [key for key, val in Y_authors.items() if len(val)>0]
 
     # iterating over chemicals and compute SD for each
-    SDs = np.zeros(len(chems))
     yr_SDs = np.zeros((len(chems), max_yr-min_yr+1))
     years = np.arange(min_yr, max_yr+1)
     save_dirname = kwargs.get('save_dirname', None)
@@ -135,20 +140,15 @@ def SD(Y_terms, chems, **kwargs):
         if not(i%1000):
             logger.info('Iteration {}..'.format(i))
             if save_dirname is not None:
-                np.savetxt(os.path.join(save_dirname, 'SDs.txt'), SDs)
                 np.savetxt(os.path.join(save_dirname, 'yr_SDs.txt'), yr_SDs)
 
+        # getting unique authors of this materials in different years
         X_authors = msdb.get_yearwise_authors_by_keywords([chm], chemical=True, return_papers=False)
         overlap_dict = yearwise_authors_IOU(X_authors, Y_authors)
         for yr in nnz_Y_yrs:
             yr_SDs[i,yr-min_yr] = 2*len(overlap_dict[yr])/(len(Y_authors[yr])+len(X_authors[yr]))
         
-        # overall SD
-        unique_X_authors = np.unique(sum([val for _,val in X_authors.items()],[]))
-        overlap = set(unique_Y_authors).intersection(set(unique_X_authors))
-        SDs[i] = 2*len(overlap) / (len(unique_Y_authors)+len(unique_X_authors))
-
-    return SDs, yr_SDs, years
+    return yr_SDs, years
 
 def SD_metrics(yr_SDs, mtype='SUM', **kwargs):
     """Computing scores based on year-wise social densities
@@ -204,9 +204,10 @@ def cosine_sims(model, chems, Y_term):
     zw_y = model.wv[Y_term]
     zw_y = zw_y / np.sqrt(np.sum(zw_y**2))
     
-    sims = -1.*np.ones(len(chems))
+    sims = np.ones(len(chems))
     for i,chm in enumerate(chems):
         if chm not in model.wv.vocab:
+            sims[i] = np.nan
             continue
 
         idx = model.wv.vocab[chm].index
