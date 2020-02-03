@@ -78,7 +78,7 @@ def compare_emb_yrSD(model_paths_dict,
                      yr_SDs_path,
                      full_chems_path,
                      yrs_path,
-                     y_term,
+                     Y_terms,
                      memory,
                      sd_score_type='SUM',
                      logfile_path=None):
@@ -105,7 +105,7 @@ def compare_emb_yrSD(model_paths_dict,
         path to the years associated with the rows of co-occurrence
         and SD matrices
 
-    * y_term: string
+    * y_term: string or list of strings
         the property term corresponding to the co-occurrence and SD matrices
 
     * memory: int
@@ -123,6 +123,7 @@ def compare_emb_yrSD(model_paths_dict,
         full_chems = f.read().splitlines()
     full_chems = np.array(full_chems)
     logger.info('Number of materials in full set of chemicals: {}'.format(len(full_chems)))
+    logger.info('The property-related keywords are {}.\n\n\n'.format(Y_terms))
 
     xvals_dict = {}
     accs_dict = {}
@@ -158,7 +159,18 @@ def compare_emb_yrSD(model_paths_dict,
         logger.info(yr_string+'number of unstudied materials: {}'.format(np.sum(unstudied_ents)))
 
         # computing the scores
-        embedd_scores = measures.cosine_sims(model, model_chems[unstudied_ents], y_term)
+        if type(Y_terms) is str:
+            embedd_scores = measures.cosine_sims(model, model_chems[unstudied_ents], Y_terms)
+        elif type(Y_terms) is list:
+            embedd_scores = np.zeros((len(Y_terms), np.sum(unstudied_ents)))
+            for i, y in enumerate(Y_terms):
+                if y not in model.wv.vocab:
+                    logger.info('{} is not in the vocabulary.'.format(y))
+                    continue
+                embedd_scores[i,:] = measures.cosine_sims(model,
+                                                          model_chems[unstudied_ents],
+                                                          y)
+            embedd_scores = np.mean(embedd_scores[np.sum(embedd_scores,axis=1)!=0,:], axis=0)
         sd_scores = measures.SD_metrics(sub_yr_SDs[unstudied_ents, :yr_loc],
                                         mtype=sd_score_type,
                                         memory=memory)
@@ -168,9 +180,11 @@ def compare_emb_yrSD(model_paths_dict,
         betas = np.arange(0,1+1e-6,0.05)
         logger.info(yr_string+'beta range: {}'.format(betas))
 
+        embedd_scores = (embedd_scores - embedd_scores.min()) / (embedd_scores.max()-embedd_scores.min())
+        sd_scores = (sd_scores-sd_scores.min()) / (sd_scores.max()-sd_scores.min())
         accs = np.zeros((len(betas), len(yrs)-yr_loc))
         for i,b in enumerate(betas):
-            scores = b*embedd_scores + gamma*(1-b)*sd_scores
+            scores = b*embedd_scores + (1-b)*sd_scores
             accs[i,:] = np.cumsum(ranking_scores_acc(scores,
                                                      sub_cocrs[unstudied_ents,:],
                                                      yr_loc))
@@ -185,6 +199,7 @@ def eval_collective_SD(model_paths_dict,
                        yrs,
                        full_chems,
                        Y_terms,
+                       case_sensitives=[],
                        logfile_path=None):
     
     logger = helpers.set_up_logger(__name__, logfile_path, False)
@@ -192,7 +207,9 @@ def eval_collective_SD(model_paths_dict,
     pr = utils.MaterialsTextProcessor()
 
     # getting the yearwise Y-authors
-    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms, return_papers=False)
+    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms,
+                                                      return_papers=False,
+                                                      case_sensitives=case_sensitives)
     
     xvals_dict = {}
     accs_dict = {}
@@ -236,7 +253,8 @@ def eval_collective_SD(model_paths_dict,
             # only those authors published on X before years<yr
             Xset = np.unique(sum([vals for y,vals in X_authors.items() if y<yr],[]))
             overlap = set(Xset).intersection(set(Yset))
-            sd_scores[i] = 2*len(overlap) / (len(Yset)+len(Xset))
+            union = set(Xset).union(set(Yset))
+            sd_scores[i] = len(overlap) / len(union)
 
         accs = np.cumsum(ranking_scores_acc(sd_scores,
                                             sub_cocrs[unstudied_idx,:],
