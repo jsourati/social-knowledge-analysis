@@ -69,7 +69,7 @@ def cooccurrences(Y_terms, ents, **kwargs):
 
     return cocrs, yrs
 
-def yearwise_authors_IOU(X,Y, x_chemical=True,y_chemical=False):
+def yearwise_authors_set_op(X,Y, x_chemical=True,y_chemical=False):
     """Returning author intersection of union for different years
 
     The years are going to be based on the dates of the Y-related papers
@@ -91,11 +91,13 @@ def yearwise_authors_IOU(X,Y, x_chemical=True,y_chemical=False):
         X.update({key: [] for key in Y_authors if key not in X_authors})
 
     overlap_dict = {}
+    union_dict   = {}
     for yr, Y_auths in Y_authors.items():
         X_auths = X_authors[yr]
         overlap_dict[yr] = list(set(Y_auths).intersection(set(X_auths)))
+        union_dict[yr] = list(set(Y_auths).union(set(X_auths)))
 
-    return overlap_dict
+    return overlap_dict, union_dict
 
 
 def yearwise_SD(Y_terms, chems, **kwargs):
@@ -137,16 +139,17 @@ def yearwise_SD(Y_terms, chems, **kwargs):
     save_dirname = kwargs.get('save_dirname', None)
     logger.info('Iterating over chemicals for computing social densities began.')
     for i, chm in enumerate(chems):
-        if not(i%1000):
+        if not(i%1000) or (i==len(chems)-1):
             logger.info('Iteration {}..'.format(i))
             if save_dirname is not None:
                 np.savetxt(os.path.join(save_dirname, 'yr_SDs.txt'), yr_SDs)
 
         # getting unique authors of this materials in different years
         X_authors = msdb.get_yearwise_authors_by_keywords([chm], chemical=True, return_papers=False)
-        overlap_dict = yearwise_authors_IOU(X_authors, Y_authors)
+        overlap_dict, union_dict = yearwise_authors_set_op(X_authors, Y_authors)
         for yr in nnz_Y_yrs:
-            yr_SDs[i,yr-min_yr] = 2*len(overlap_dict[yr])/(len(Y_authors[yr])+len(X_authors[yr]))
+            #yr_SDs[i,yr-min_yr] = 2*len(overlap_dict[yr])/(len(Y_authors[yr])+len(X_authors[yr]))
+            yr_SDs[i,yr-min_yr] = len(overlap_dict[yr])/len(union_dict[yr])
         
     return yr_SDs, years
 
