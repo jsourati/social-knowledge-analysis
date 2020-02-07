@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import pdb
-
 import numpy as np
 import pandas as pd
 from itertools import groupby
@@ -10,6 +9,10 @@ from itertools import groupby
 # This module uses a text-processor class provided by mat2vec project
 # specifically designed for materials science articles
 mat2vec_path = '~/scratch-midway2/repos/mat2vec'
+path = '/home/jamshid/codes/social-knowledge-analysis'
+sys.path.insert(0, path)
+
+from misc import helpers
 
 from pybliometrics.scopus import AbstractRetrieval
 from pybliometrics.scopus.exception import Scopus429Error
@@ -258,8 +261,10 @@ def Scopus_to_SQLtable(dois,
     return bad_dois
 
     
-def complete_affiliations(till_paper_id, sql_db, sql_cursor):
+def complete_affiliations(paper_ids, sql_db, sql_cursor, logfile_path=None):
 
+    logger = helpers.set_up_logger(__name__, logfile_path, False, file_mode='a')
+    
     # initialize the affiliation primary key
     sql_cursor.execute('SELECT aff_id FROM affiliation;')
     all_aff_PKs = sql_cursor.fetchall()
@@ -273,10 +278,15 @@ def complete_affiliations(till_paper_id, sql_db, sql_cursor):
     sql_cursor.execute('SELECT * FROM author_affiliation_mapping;')
     curr_author_aff_pairs = list(sql_cursor.fetchall())
 
-    sql_cursor.execute('SELECT doi FROM paper WHERE paper_id<{};'.format(till_paper_id))
-    dois = [a[0] for a in sql_cursor.fetchall()]
+    pids_array = ','.join([str(p) for p in paper_ids])
+    sql_cursor.execute('SELECT doi, paper_id FROM paper WHERE paper_id IN {};'.format(pids_array))
+    RES = sql_cursor.fetchall()
+    dois = [a[0] for a in RES]
+    paper_ids = [a[1] for a in RES]
 
+    dois_with_nonexisting_authors = []
     for j,doi in enumerate(dois):
+        
         try:
             r = AbstractRetrieval(doi)
         except Scopus429Error:
@@ -297,8 +307,16 @@ def complete_affiliations(till_paper_id, sql_db, sql_cursor):
             sql_cursor.execute('SELECT author_id \
                                 FROM author \
                                 WHERE author_scopus_ID = {}'.format(scps_id))
-            this_author_PK = sql_cursor.fetchall()[0][0]
-
+            
+            this_author_PK = sql_cursor.fetchall()
+            if len(this_author_PK)==0:
+                if doi not in dois_with_nonexisting_authors:
+                    dois_with_nonexisting_authors += [doi]
+                logger.info('(CASE NUMBER {}) PAPER_ID {}, DOI {}: author with scopus ID {} does not exist.'.format(306+len(dois_with_nonexisting_authors), paper_ids[j], doi, scps_id))
+                continue
+            else:
+                this_author_PK = this_author_PK[0][0]
+            
             # directly go to their affiliations
             if r.authors[i].affiliation is not None:
                 author_aff_scopus_id_list = np.unique(r.authors[i].affiliation)
@@ -319,6 +337,9 @@ def complete_affiliations(till_paper_id, sql_db, sql_cursor):
                                             VALUES({}, {})'.format(this_author_PK,
                                                                    this_aff_PK))
                         curr_author_aff_pairs += [(this_author_PK, this_aff_PK)]
+                        logger.info('{} have been added to A2A.'.format((r.authors[i].given_name,
+                                                                         r.authors[i].surname,
+                                                                         this_aff_PK)))
                 else:
                     lcn = np.where([x.id==aff_scps_id for x in r.affiliation])[0]
                     if len(lcn)>0:
@@ -342,6 +363,10 @@ def complete_affiliations(till_paper_id, sql_db, sql_cursor):
                     sql_cursor.execute('INSERT INTO author_affiliation_mapping \
                                         VALUES({}, {})'.format(this_author_PK, aff_PK))
                     curr_author_aff_pairs += [(this_author_PK, aff_PK)]
+                    logger.info('{} have been added to A2A.'.format((r.authors[i].given_name,
+                                                                     r.authors[i].surname,
+                                                                     this_aff_PK)))
+
                     # update the affliations list
                     curr_aff_scopus_id_list += [aff_scps_id]
                     aff_PK += 1
@@ -349,3 +374,110 @@ def complete_affiliations(till_paper_id, sql_db, sql_cursor):
         if not(j%1000):
             np.savetxt('/home/jamshid/codes/data/iter_inds.txt', [j])
         sql_db.commit()
+
+
+
+
+def correct_mats_from_WOS(msdb,wos_D,wos_T,wos_A,yr_susp_dois):
+
+    pr = MatTextProcessor()
+    
+    with open(yr_susp_dois,'r') as f:
+        susp_dois = f.read().splitlines()
+
+    missing_dois = []
+    for i in range(1,len(susp_dois)):
+        doi = susp_dois[i]
+        idx = np.where(wos_D==doi)
+        if len(idx)==0:
+            missing_dois += [doi]
+            continue
+        else:
+            idx = idx[0][0]
+
+        true_tt = wos_T[idx]
+        true_ab = wos_A[idx]
+
+        msdb.crsr.execute("SELECT title,abstract FROM paper WHERE doi='{}'".format(doi))
+        false_tt,false_ab = msdb.crsr.fetchone()
+
+        # replce mistaken chemicals in false_tt and false_ab by
+        # chemicals in true_tt and true_ab, respectively
+        false_tt_ccs = [_[0] for _ in pr.process(false_tt)[1]]
+        false_ab_ccs = [_[0] for _ in pr.process(false_ab)[1]]
+        true_tt_ccs  = [_[0] for _ in pr.process(true_tt)[1]]
+        true_ab_ccs  = [_[0] for _ in pr.process(true_ab)[1]]
+
+        # title
+        false_tt_tokens = sum(pr.tokenize(false_tt),[])
+        for cc in np.unique(true_tt_ccs):
+            if not(pr.is_simple_formula(cc)): continue
+
+            # find the distorted forms of true chemical pattern in the tokens
+            distorted_forms = []
+            found_partial_matches = []
+            for tok in false_tt_tokens:
+                if not(pr.is_simple_formula(tok)): continue
+                if tok in cc:
+                    found_partial_matches += [tok]
+                else:
+                    # if the current token is not part of the pattern, but partial
+                    # found matches is not empty, reset it to empty set
+                    # consider scenario:
+                    # pattern: 'Zn3P2'
+                    # exp.:    'there are 3 properties for Zn and 2 for P'
+                    if len(found_partial_matches)>0:
+                        found_partial_matches = []
+
+                # if the partial matches become complete, AND
+                # the matches include broken parts, save the tokens
+                # as one of the detected distorted forms
+                if ''.join(found_partial_matches)==cc:
+                    if len(found_partial_matches)>1:
+                        distorted_forms += [' '.join(found_partial_matches)]
+
+            # replace the distorted forms, if any
+            for x in distorted_forms:
+                false_tt_tokens.replace(x,cc)
+                        
+            
+        # abstract
+        false_ab_tokens = sum(pr.tokenize(false_ab),[])
+        for cc in np.unique(true_ab_ccs):
+            if not(pr.is_simple_formula(cc)): continue
+
+            # find the distorted forms of true chemical pattern in the tokens
+            distorted_forms = []
+            found_partial_matches = []
+            for tok in false_ab_tokens:
+                if not(pr.is_simple_formula(tok)) and (tok not in cc): continue
+                if tok in cc:
+                    found_partial_matches += [tok]
+                else:
+                    # if the current token is not part of the pattern, but partial
+                    # found matches is not empty, reset it to empty set
+                    # consider scenario:
+                    # pattern: 'Zn3P2'
+                    # exp.:    'there are 3 properties for Zn and 2 for P'
+                    if len(found_partial_matches)>0:
+                        found_partial_matches = []
+
+                # if the partial matches become complete, AND
+                # the matches include broken parts, save the tokens
+                # as one of the detected distorted forms
+                if ''.join(found_partial_matches)==cc:
+                    if len(found_partial_matches)>1:
+                        distorted_forms += [' '.join(found_partial_matches)]
+                    # resetting partial m
+                    found_partial_matches = []
+
+            pdb.set_trace()
+            # replace the distorted forms, if any
+            for x in np.unique(distorted_forms):
+                false_ab.replace(x,cc)
+
+        
+    return missing_dois
+
+            
+        
