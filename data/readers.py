@@ -349,22 +349,26 @@ class MatScienceDB(object):
                                         cocrs,
                                         yr_SDs,
                                         Y_terms,
-                                        yrs,
-                                        case_sensitives=[],
-                                        logfile_path=None,
-                                        savefile_path=None):
+                                        yrs):
         """Collecting authors of papers with new co-occurrences (new discoveries)
         and extracting their previous papers on the topic of the property and/or
         the newly studied molecule
         """
 
+        case_sensitives = kwargs.get('case_sensitives', [])
+        logfile_path = kwargs.get('logfile_path', None)
+        savefile_path = kw.args('savefile_path', None)
+        start_yr = kwargs.get('start_yr', 2001)
+        yr_Y_authors = kwargs.get('yr_Y_authors', None)
+        yr_Y_papers = kwargs.get('yr_Y_papers', None)
+        
         logger = set_up_logger(__name__,logfile_path,False)
 
-        yr_Y_authors, yr_Y_papers = self.get_yearwise_authors_by_keywords(
-            Y_terms, return_papers=True, case_sensitives=case_sensitives)
+        if (yr_Y_authors is None) or (yr_Y_papers is None):
+            yr_Y_authors, yr_Y_papers = self.get_yearwise_authors_by_keywords(
+                Y_terms, return_papers=True, case_sensitives=case_sensitives)
 
         # analyze years from 2001 to 2018 (note that: yrs[-1]=2019)
-        start_yr = 2001
         disc_dict = {}
         for yr in np.arange(start_yr, yrs[-1]):
             yr_loc = np.where(yrs==yr)[0][0]
