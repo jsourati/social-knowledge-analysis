@@ -9,15 +9,32 @@ import numpy as np
 
 from gensim.models import Word2Vec
 
+
 path = '/home/jamshid/codes/social-knowledge-analysis'
 sys.path.insert(0, path)
 
 from data import readers
 from misc import helpers
 from training.train import MyCallBack
+from data.utils import MatTextProcessor
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
-msdb = readers.MatScienceDB(config_path, 'scopus')
+msdb = readers.MatScienceDB(config_path, 'msdb')
+pr = MatTextProcessor()
+
+ignored_toks = ["from", "as", "at", "by", "of", "on", "into", "to", "than", "all", "its",
+                "over", "in", "the", "a", "an", "/", "under","=", ".", ",", "(", ")",
+                "<", ">", "\"", "", "", "", "", "-", "%", "&", "",
+                "<nUm>", "been", "be", "are", "which", "where",
+                 "were", "have", "important", "has", "can", "or", "we", "our",
+                "article", "paper", "show", "there", "if", "these", "could", "publication",
+                "while", "measured", "measure", "demonstrate", "investigate", "investigated",
+                "demonstrated", "when", "prepare", "prepared", "use", "used", "determine",
+                "determined", "find", "successfully", "newly", "present",
+                "reported", "report", "new", "characterize", "characterized", "experimental",
+                "result", "results", "showed", "shown", "such", "after",
+                "but", "this", "that", "via", "is", "was", "and", "using", "for", "here"]
+
 
 
 def cooccurrences(Y_terms, ents, **kwargs):
@@ -221,3 +238,45 @@ def cosine_sims(model, chems, Y_term):
         sims[i] = np.dot(zw_y, zo_x)
 
     return sims
+
+def sims_two_lists(S1, S2, model, emb_types='ww'):
+    """Similarity between two lists of strings
+    """
+
+    if emb_types[0]=='w':
+        mat1 = np.array([model.wv[x].tolist() for x in S1])
+    elif emb_types[0]=='o':
+        mat1 = np.array([model.wv(x).tolist() for x in S1])
+
+    if emb_types[1]=='w':
+        mat2 = np.array([model.wv[x].tolist() for x in S2])
+    elif emb_types[1]=='o':
+        mat2 = np.array([model.wv(x).tolist() for x in S2])
+
+    inner_mat = np.inner(mat1, mat2)
+    outer_mat = np.sqrt(np.outer(np.sum(mat1**2,axis=1),
+                                 np.sum(mat2**2,axis=1)))
+
+    return np.max(inner_mat/outer_mat)
+
+def author_sim_curves(author_id, keywords, model):
+    """Similarity of the content of an author's previous publications
+    to a given set of keywords
+    """
+
+    (_,pids),(_,dates),(_,T),(_,A) = msdb.get_papers_by_author_id(
+        [author_id],['paper_id','date','title','abstract']).items()
+    years = [d.year for d in dates]
+
+    sims = np.zeros(len(years))
+    for i, abst in enumerate(A):
+        tokens = sum(pr.mat_preprocess(abst)+pr.mat_preprocess(T[i]), [])
+        tokens = [t for t in tokens if t in model.wv.vocab]
+        tokens = list(set(tokens) - set(ignored_toks))
+        
+        sims[i] = sims_two_lists(tokens,keywords,model,'ww')
+        
+    return years, sims
+
+
+        
