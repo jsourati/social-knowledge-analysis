@@ -20,7 +20,7 @@ from data.utils import MatTextProcessor
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
 msdb = readers.MatScienceDB(config_path, 'msdb')
-pr = MatTextProcessor()
+#pr = MatTextProcessor()
 
 ignored_toks = ["from", "as", "at", "by", "of", "on", "into", "to", "than", "all", "its",
                 "over", "in", "the", "a", "an", "/", "under","=", ".", ",", "(", ")",
@@ -55,9 +55,9 @@ def cooccurrences(Y_terms, ents, **kwargs):
     logger.info('Downloading papers with terms {} in their abstracts'.format(Y_terms))
     case_sensitives = kwargs.get('case_sensitives', [])
     (_,Y_papers), (_,Y_dates) = msdb.get_papers_by_keywords(Y_terms,
-                                                            ['paper_id','date'],
-                                                            'OR',
-                                                            case_sensitives).items()
+                                                            cols=['paper_id','date'],
+                                                            logical_comb='OR',
+                                                            case_sensitives=case_sensitives).items()
     Y_years = np.array([y.year for y in Y_dates])
     Y_distinct_yrs = np.unique(Y_years)
     min_yr = np.min(Y_years)
@@ -73,8 +73,8 @@ def cooccurrences(Y_terms, ents, **kwargs):
 
         # add co-occurrences to all chemicals present in this paper
         # all chemicals in this paper
-        present_ents = msdb.get_chemicals_by_paper_id(int(Y_papers[i]))
-        present_ents_formula = present_ents['formula'] if len(present_ents)>0 else []
+        present_ents = msdb.get_chemicals_by_paper_ids(int(Y_papers[i]), cols=['formula'])
+        present_ents_formula = present_ents[int(Y_papers[i])]['formula'] if len(present_ents)>0 else []
         present_ents_formula = list(set(present_ents_formula).intersection(set(ents)))
         present_ents_locs = [np.where(ents==frml)[0][0] for frml in present_ents_formula]
         
@@ -86,26 +86,14 @@ def cooccurrences(Y_terms, ents, **kwargs):
 
     return cocrs, yrs
 
-def yearwise_authors_set_op(X,Y, x_chemical=True,y_chemical=False):
+def yearwise_authors_set_op(X_authors ,Y_authors):
     """Returning author intersection of union for different years
 
     The years are going to be based on the dates of the Y-related papers
     """
 
-    if isinstance(Y, list):
-        Y_authors = msdb.get_yearwise_authors_by_keywords(Y, y_chemical)
-    else:
-        Y_authors = Y
-    y_yrs = list(Y_authors.keys())
-    
-    if isinstance(X, list):
-        X_authors = msdb.get_yearwise_authors_by_keywords(X,
-                                                          x_chemical,
-                                                          min_yr=np.min(y_yrs),
-                                                          max_yr=np.max(y_yrs))
-    elif isinstance(X,dict):
-        X_authors = X
-        X.update({key: [] for key in Y_authors if key not in X_authors})
+    # make sure 
+    X_authors.update({key: [] for key in Y_authors if key not in X_authors})
 
     overlap_dict = {}
     union_dict   = {}
@@ -137,18 +125,19 @@ def yearwise_SD(Y_terms, chems, **kwargs):
     # getting unique authors of Y-terms in different years
     case_sensitives = kwargs.get('case_sensitives',[])
     logger.info('Downloading authors for terms {} in their abstracts'.format(Y_terms))
-    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms,
-                                                      return_papers=False,
-                                                      case_sensitives=case_sensitives)
-    unique_Y_authors = np.unique(sum([val for _,val in Y_authors.items()],[]))
-    min_yr = np.min(list(Y_authors.keys()))
-    max_yr = np.max(list(Y_authors.keys()))
+    R = msdb.get_authors_by_keywords(Y_terms,
+                                     cols=['author_id','P.date'],
+                                     return_papers=False,
+                                     case_sensitives=case_sensitives)
+    if len(R)==0:
+        raise ValueError('Given property terms are not associated with any papers in the data base')
+    Y_years = np.array([y.year for y in R['date']])
+    Y_authors = {y: R['author_id'][Y_years==y] for y in np.unique(Y_years)}
+    unique_Y_authors = np.unique(R['author_id'])
+    min_yr = np.min(Y_years)
+    max_yr = np.max(Y_years)
     logger.info('Downloading is done. The oldest paper is published in {}.'.format(min_yr))
     logger.info('The total number of unique authors is {}.'.format(len(unique_Y_authors)))
-
-    # but we only need those years where there exist non-zero set of Y-authors
-    # otherwise, the SD will be zero no matter how many X-authors we get
-    nnz_Y_yrs = [key for key, val in Y_authors.items() if len(val)>0]
 
     # iterating over chemicals and compute SD for each
     yr_SDs = np.zeros((len(chems), max_yr-min_yr+1))
@@ -162,10 +151,15 @@ def yearwise_SD(Y_terms, chems, **kwargs):
                 np.savetxt(os.path.join(save_dirname, 'yr_SDs.txt'), yr_SDs)
 
         # getting unique authors of this materials in different years
-        X_authors = msdb.get_yearwise_authors_by_keywords([chm], chemical=True, return_papers=False)
+        R = msdb.get_authors_by_chemicals([chm],
+                                          cols=['author_id','P.date'],
+                                          years=np.unique(Y_years),
+                                          return_papers=False)
+        if len(R)==0: continue
+        X_years = np.array([y.year for y in R[chm]['date']])
+        X_authors = {y: R[chm]['author_id'][X_years==y] for y in np.unique(X_years)}
         overlap_dict, union_dict = yearwise_authors_set_op(X_authors, Y_authors)
-        for yr in nnz_Y_yrs:
-            #yr_SDs[i,yr-min_yr] = 2*len(overlap_dict[yr])/(len(Y_authors[yr])+len(X_authors[yr]))
+        for yr in Y_authors:
             yr_SDs[i,yr-min_yr] = len(overlap_dict[yr])/len(union_dict[yr])
         
     return yr_SDs, years
@@ -279,4 +273,4 @@ def author_sim_curves(author_id, keywords, model):
     return years, sims
 
 
-        
+    
