@@ -4,8 +4,8 @@ import pdb
 import json
 import logging
 import pymysql
-import pdb
 import numpy as np
+from scipy import sparse
 
 from gensim.models import Word2Vec
 
@@ -142,8 +142,87 @@ def get_size_of_papers(paper_ids):
     for i in set(paper_ids)-set(NoC):
         NoC[i] = 0
 
-    sizes = {i: NoA[i]+NoC[i] for i in paper_ids}
-    
+    sizes = {i: NoA[i]+NoC[i] for i in paper_ids}    
 
     return sizes
         
+def compute_vertex_matrix(**kwargs):
+    """Forming vertex matrix of the hypergraph, which is a |E|x|V|
+    matrix and its (i,j) element is equal to 1 if hyperedge (article)
+    i has node j and zero otherwise
+    
+    The hyperdeges are the articles and nodes are the union of author and
+    chemical nodes
+    """
+
+    # setting up the logger
+    logger_disable = kwargs.get('logger_disable', False)
+    logfile_path =   kwargs.get('logfile_path', None)
+    logger = helpers.set_up_logger(__name__, logfile_path, logger_disable)
+
+    savefile_path = kwargs.get('savefile_path',None)
+
+    msdb.crsr.execute('SELECT COUNT(*) FROM author;')
+    nA = msdb.crsr.fetchone()[0]
+    msdb.crsr.execute('SELECT COUNT(*) FROM chemical;')
+    nC = msdb.crsr.fetchone()[0]
+    
+    logger.info('There are {} author nodes and {} chemical nodes in the database.'.format(nA,nC))
+
+    nP = 1507143
+    
+    VM = sparse.lil_matrix((nP,nA+nC), dtype=np.uint8)
+    # filling the matrix with batches
+    cnt = 0
+    batch_size = 500
+    logger.info('Starting to fill the vertex matrix with batches of size {}'.format(batch_size))
+    while cnt<nP:
+        pids = np.arange(cnt, cnt + batch_size)
+        auids = msdb.get_authors_by_paper_ids(pids, cols=['author_id'])
+        chemids = msdb.get_chemicals_by_paper_ids(pids, cols=['chem_id'])
+
+        cols = []
+        rows = []
+        for i,pid in enumerate(pids):
+            au_cols   = auids[pid]['author_id'] if pid in auids else []
+            chem_cols = chemids[pid]['chem_id'] + nA if pid in chemids else []
+            cols += [np.concatenate((au_cols, chem_cols))]
+            rows += [pid*np.ones(len(au_cols)+len(chem_cols))]
+
+        cols = np.concatenate(cols)
+        rows = np.concatenate(rows)
+        VM[rows,cols] = 1
+
+        cnt += batch_size
+
+        if not(cnt%500):
+            logger.info('{} articles have been processed'.format(cnt))
+            if not(cnt%10000) and (savefile_path is not None):
+                sparse.save_npz(savefile_path, VM.tocsc())
+
+    return VM
+
+def compute_vertex_KW_submatrix(los, **kwargs):
+    """Forming a submatrix corresponding to conceptual nodes
+    given as a set of keywords priveded in `los` (list of strings) arguments
+    """
+
+    case_sensitives = kwargs.get('case_sensitives', [])
+    
+    nP = 1507143
+    ncols = len(los)
+    VM = sparse.lil_matrix((nP,ncols), dtype=np.uint8)
+
+    for i, kw in enumerate(los):
+        if kw in case_sensitives:
+            cs = [kw]
+        else:
+            cs = []
+
+        R = msdb.get_papers_by_keywords([kw], case_sensitives=cs)
+        rows = R['paper_id']
+        cols = i*np.ones(len(rows))
+
+        VM[rows, cols] = 1
+
+    return VM
