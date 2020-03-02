@@ -303,3 +303,73 @@ def build_yearwise_hypergraph(years, **kwargs):
 
     return R, P, cmask
 
+
+def compute_transprob_via_1author(P, source_inds, dest_inds, **kwargs):
+    """Computing transition probabilities of a set of conceptual nodes 
+    to a set of destination nodes
+    """
+
+    author_rows = kwargs.get('author_rows', None)
+
+    if author_rows is None:
+        # number of authors 
+        msdb.crsr.execute('SELECT COUNT(*) FROM author;')
+        nA = msdb.crsr.fetchone()[0]
+        author_rows = np.arange(nA)
+
+    subR_1 = P[:,author_rows]
+    subR_1 = subR_1[source_inds, :]
+    subR_2 = P[author_rows,:]
+    subR_2 = subR_2[:, dest_inds]
+
+    return subR_1 @ subR_2
+
+def compute_accessability_scores(P, cmask, **kwargs):
+    """Computing accessibility between chemicals and the property keywords
+
+    Given transition probability matrix (P) does not include all the nodes, 
+    only those that are specified in `cmask` binary vector. However, the output
+    of this function will be a vector of fixed length (=`len(chems)`) such that
+    those chemicals that are not present in the current hypergraph will get -1
+    score.
+
+    Identifying node types in `P` is based on our certainty that the first chucnk
+    of P is still corresponding to authors, the second chunk to chemicals and the
+    third chunk to the property-related keywords.
+    """
+
+    assert P.shape[0]==np.sum(cmask), 'The given cmask does not match the \
+                                       dimension of P.'
+    
+    # fixing the number of authors, chemicals.. the rest will be property kewords
+    nA = 1739453
+    nC = 107466
+    nKW = len(cmask) - nA - nC
+
+    A_inds = np.arange(np.sum(cmask[:nA]))
+    C_inds = np.arange(np.sum(cmask[:nA]), np.sum(cmask[:nA+nC]))
+    KW_inds   = np.arange(np.sum(cmask[:nA+nC]), np.sum(cmask))
+
+    transprob_CtoKW = compute_transprob_via_1author(P,
+                                                    source_inds=C_inds,
+                                                    dest_inds=KW_inds,
+                                                    author_rows=A_inds)
+    transprob_KWtoC = compute_transprob_via_1author(P,
+                                                    source_inds=KW_inds,
+                                                    dest_inds=C_inds,
+                                                    author_rows=A_inds)
+
+    # computing two-way transition probability (accessibility score)
+    access_CtoKW = 0.5*(transprob_CtoKW + transprob_KWtoC.T)
+
+    # summarizing multiple accessibility scores for chemicals corresponding to 
+    # multiple proprety-related keywords
+    access_CtoKW = np.squeeze(np.array(np.sum(access_CtoKW, axis=1)))
+
+    # expanding this accessability score to containt all chemicals, even
+    # those that does not exist in this hypergraph
+    total_access_CtoKW = -np.ones(nC)
+    total_access_CtoKW[cmask[nA:nA+nC]] = access_CtoKW
+
+    return total_access_CtoKW
+    
