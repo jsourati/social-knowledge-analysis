@@ -226,3 +226,80 @@ def compute_vertex_KW_submatrix(los, **kwargs):
         VM[rows, cols] = 1
 
     return VM
+
+def compute_transition_prob(R, **kwargs):
+    """Computing the transition probability matrix given the
+    binary (0-1) vertex weight matrix (dim.; |E|x|V|)
+    """
+
+    # setting up the logger
+    logger_disable = kwargs.get('logger_disable', False)
+    logfile_path   = kwargs.get('logfile_path', None)
+    logfile_mode   = kwargs.get('logfile_modeo', 'w')
+    logger = helpers.set_up_logger(__name__, logfile_path,
+                                   logger_disable,
+                                   logfile_mode)
+    
+    iDV = sparse.diags(np.squeeze(1/np.array(np.sum(R,axis=0))))
+    iDV = iDV.tocsr()
+    iDE = sparse.diags(np.squeeze(1/np.array(np.sum(R,axis=1))))
+    iDE = iDE.tocsr()
+    
+    return iDV @ R.T @ iDE @ R
+
+
+def prune_vertex_weight_matrix(R):
+
+    # remove papers with zero authors and chemicals (hyperedges with no nodes!)
+    mask = np.ones(R.shape[0],dtype=bool)
+    mask[np.array(np.sum(R,axis=1))[:,0]==0] = 0
+    R = R.tocsr()[mask,:]
+
+    # remove isolated nodes (nodes that are not in any hyperedges)
+    cmask = np.ones(R.shape[1],dtype=bool)
+    cmask[np.array(np.sum(R,axis=0))[0,:]==0] = 0
+    R = R.tocsc()[:,cmask]
+    
+    return R, cmask
+
+     
+def build_yearwise_hypergraph(years, **kwargs):
+    """Building a hypergraph for a given set of years
+
+    The hypergraph will be built based on a given pre-computed vertex weight matrix,
+    or the paths to the raw sub-matrices (corresponding to authors/chemicals nodes
+    and property keywords nodes)
+    """
+
+    """ Building General Vertex Weight Matrix (R) """
+    R = kwargs.get('R', None)
+    path_VM_core = kwargs.get('path_VM_core', None)
+    path_VM_kw = kwargs.get('path_VM_kw', None)
+
+    assert (R is not None) or \
+        ((path_VM_core is not None) and (path_VM_kw is not None)), \
+        'Either the pre-computed vertex weight matrix (R), or the paths \
+         to the submatrices need to be given.'
+
+    if R is None:
+        VM = sparse.load_npz(path_VM_core)
+        kwVM = sparse.load_npz(path_VM_kw)
+        R = sparse.hstack((VM, kwVM), 'csc')
+
+    """ Restricting R to Articles in the Specified Years """
+    # choosing rows (articles) associated with the given years
+    yrs_arr = ','.join([str(x) for x in years])
+    msdb.crsr.execute('SELECT paper_id FROM paper WHERE \
+                       YEAR(date) IN ({});'.format(yrs_arr))
+    yr_pids = np.array([x[0] for x in msdb.crsr.fetchall()])
+    R = R[yr_pids,:]
+
+    """ Pruning R """
+    # by removing empty hyperedges and isolated nodes
+    R, cmask = prune_vertex_weight_matrix(R)
+
+    """ Computing the Transition Probabilities """
+    P = compute_transition_prob(R)
+
+    return R, P, cmask
+
