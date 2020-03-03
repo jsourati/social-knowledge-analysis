@@ -14,7 +14,9 @@ from misc import helpers
 from data import utils, readers
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
-msdb = readers.MatScienceDB(config_path, 'scopus')
+msdb = readers.MatScienceDB(config_path, 'msdb')
+
+pr = utils.MaterialsTextProcessor()
 
 def ranking_scores_acc(scores, cocrs, yridx, k=50):
     """Returning the accuracy of predicting co-occurrence of a pair of
@@ -194,72 +196,93 @@ def compare_emb_yrSD(model_paths_dict,
     return xvals_dict, accs_dict
         
         
-def eval_collective_SD(model_paths_dict,
-                       cocrs,
-                       yrs,
-                       full_chems,
-                       Y_terms,
-                       case_sensitives=[],
-                       logfile_path=None):
+def eval_predictor(chems,
+                   predictor_func,
+                   gt_func,
+                   year_of_pred,
+                   **kwargs):
+    """Evaluating a given predictor function in how accurate its predictions
+    match the actual discoveries returned by a given ground-truth function
+
+    The evaluations are done for individual years strating from a given year 
+    of prediction to 2018.
+    """
     
+    path_to_wvmodel = kwargs.get('path_to_wvmodel', None)
+    count_threshold = kwargs.get('count_threshold', 0)
+    logfile_path = kwargs.get('logfile_path', None)
     logger = helpers.set_up_logger(__name__, logfile_path, False)
 
-    pr = utils.MaterialsTextProcessor()
-
-    # getting the yearwise Y-authors
-    Y_authors = msdb.get_yearwise_authors_by_keywords(Y_terms,
-                                                      return_papers=False,
-                                                      case_sensitives=case_sensitives)
-    
-    xvals_dict = {}
-    accs_dict = {}
-    for yr, model_path in model_paths_dict.items():
-        logger.info('Start computing scores for year {}'.format(yr))
-        yr_string = 'PROGRESS FOR {}: '.format(yr)
-        model = Word2Vec.load(model_path)
+    """ Restricting to Model Vocabulary (if necessasry) """
+    # if a model is given, consider the subset of chemicals that exist in the
+    # model vocabulary (--> sub_chems)
+    if path_to_wvmodel is not None:
+        
+        model = Word2Vec.load(path_to_wvmodel)
 
         # extract chemicals from the vocabulary of the model
-        logger.info(yr_string+'extracting chemicals from the vocabulary of the model with count thresholds.'.format(yr))
+        logger.info('Extracting chemicals from the vocabulary of the model with count threshold {}.'.format(count_threshold))
         model_chems = []
         for w in model.wv.index2word:
-            if pr.is_simple_formula(w) and model.wv.vocab[w].count>3:
+            if pr.is_simple_formula(w) and model.wv.vocab[w].count>count_threshold:
                 if (pr.normalized_formula(w)==w) or (w in ['H2','O2','N2']):
                     model_chems += [w]
-        logger.info(yr_string+'there are {} chemicals extracted.'.format(len(model_chems)))
+        logger.info('{} chemicals are extracted from the vocabulary.'.format(len(model_chems)))
 
         # get the intersection between the extracted chemicals and the full set
-        logger.info(yr_string+'there are {} chemicals removed from model chemicals because they were missing in the full chemical set'.format(len(set(model_chems)-set(full_chems))))
-        model_chems = list(set(model_chems).intersection(set(full_chems)))
-        model_chems_indic_in_full = np.in1d(full_chems, np.array(model_chems))
-        # this is the actual order of materials we will consider in model chemicals
-        model_chems = full_chems[model_chems_indic_in_full]
-        logger.info(yr_string+'number of total chemicals after correction: {}'.format(len(model_chems)))
-
-        # get the submatrices corresponding to the corrected set of chemicals
-        sub_cocrs  = cocrs[model_chems_indic_in_full,:]
-
-        # take materials unstudied until year yr
-        yr_loc = np.where(yrs==yr)[0][0]
-        unstudied_idx = np.where(np.sum(sub_cocrs[:,:yr_loc],axis=1)==0)[0]
-
-        # get unique authors of Y-terms for all years<yr
-        Yset = np.unique(sum([vals for y,vals in Y_authors.items() if y<yr],[]))
+        logger.info('There are {} chemicals removed from model chemicals because \
+                     they were missing in the full chemical set'.format(
+                         len(set(model_chems)-set(chems))))
         
-        # computing scores for unstudied samples
-        sd_scores = np.zeros(len(unstudied_idx))
-        for i,chm in enumerate(full_chems[unstudied_idx]):
-            # all authors published on x
-            X_authors = msdb.get_yearwise_authors_by_keywords([chm],chemical=True,return_papers=False)
-            # only those authors published on X before years<yr
-            Xset = np.unique(sum([vals for y,vals in X_authors.items() if y<yr],[]))
-            overlap = set(Xset).intersection(set(Yset))
-            union = set(Xset).union(set(Yset))
-            sd_scores[i] = len(overlap) / len(union)
+        model_chems = list(set(model_chems).intersection(set(chems)))
+        model_chems_indic_in_full = np.in1d(chems, np.array(model_chems))
+        
+        # this is the actual order of materials we will consider in model chemicals
+        sub_chems = chems[model_chems_indic_in_full]
+        
+        logger.info('Number of total chemicals after correction: {}'.format(len(sub_chems)))
 
-        accs = np.cumsum(ranking_scores_acc(sd_scores,
-                                            sub_cocrs[unstudied_idx,:],
-                                            yr_loc))
-        accs_dict[str(yr)] = accs
-        xvals_dict[str(yr)] = list([int(x) for x in np.arange(1,len(yrs)-yr_loc+1)])
+    else:
+        # having sub_chems as None should mean that the gt/predictor should consider all chemicals
+        sub_chems = None
 
-    return xvals_dict, accs_dict
+
+    """ Generating the Prediction """
+    preds = predictor_func(year_of_pred, sub_chems)
+
+
+    """ Evaluating the Predictions for the Upcoming Years """
+    years_of_eval = np.arange(year_of_pred, 2019)
+    accs = np.zeros(len(years_of_eval))
+    for i, yr in enumerate(years_of_eval):
+        gt = gt_func(yr, sub_chems)
+        accs[i] = np.sum(np.in1d(gt, preds)) / len(preds)
+        
+
+    return np.cumsum(accs)
+
+
+def gt_disc(cocrs, years_of_cocrs_columns):
+    """Generating ground truth discoveries in a given year
+    """
+    
+    # list of chemicals: full set or subset of chemicals
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    def gt_disc_func(year_of_gt, sub_chems):
+        if sub_chems is not None:
+            sub_cocrs = cocrs[np.in1d(chems, sub_chems),:]
+        else:
+            sub_cocrs = cocrs
+            sub_chems = chems
+
+        yr_loc = np.where(years_of_cocrs_columns==year_of_gt)[0][0]
+        disc_indics = (np.sum(sub_cocrs[:,:yr_loc],axis=1)==0) * (sub_cocrs[:,yr_loc]>0)
+
+        return sub_chems[disc_indics]
+
+    return gt_disc_func
+    
+    
+    
