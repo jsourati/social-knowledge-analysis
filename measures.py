@@ -17,6 +17,8 @@ from data import readers
 from misc import helpers
 from training.train import MyCallBack
 from data.utils import MatTextProcessor
+from hypergraphs import compute_transition_prob, compute_transprob_via_1author, \
+   preprocess_VM
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
 msdb = readers.MatScienceDB(config_path, 'msdb')
@@ -164,7 +166,7 @@ def yearwise_SD(Y_terms, chems, **kwargs):
         
     return yr_SDs, years
 
-def SD_metrics(yr_SDs, mtype='SUM', **kwargs):
+def ySD_scalar_metric(yr_SDs, mtype='SUM', **kwargs):
     """Computing scores based on year-wise social densities
 
     :Parameters:
@@ -232,6 +234,98 @@ def cosine_sims(model, chems, Y_term):
         sims[i] = np.dot(zw_y, zo_x)
 
     return sims
+
+def accessibility_scores(year, **kwargs):
+    """Computing accessibility between chemicals and the property keywords
+
+    The hypergraph will be built based on a given pre-computed vertex weight matrix,
+    or the paths to the raw sub-matrices (corresponding to (1) authors/chemicals nodes
+    and (2) property keywords nodes, as two separate paths)
+
+    Identifying node types in `P` is based on our certainty that the first chucnk
+    of P is still corresponding to authors, the second chunk to chemicals and the
+    third chunk to the property-related keywords.
+    """
+    
+    """ Building General Vertex Weight Matrix (R) """
+    R = kwargs.get('R', None)
+    path_VM_core = kwargs.get('path_VM_core', None)
+    path_VM_kw = kwargs.get('path_VM_kw', None)
+    sub_chems = kwargs.get('sub_chems', [])
+
+    assert (R is not None) or \
+        ((path_VM_core is not None) and (path_VM_kw is not None)), \
+        'Either the pre-computed vertex weight matrix (R), or the paths \
+         to the submatrices need to be given.'
+
+    if R is None:
+        VM = sparse.load_npz(path_VM_core)
+        kwVM = sparse.load_npz(path_VM_kw)
+        R = sparse.hstack((VM, kwVM), 'csc')
+
+    """ Preprocessing R """
+    R, col_types, chems = preprocess_VM(R, years=[year], prune=True)
+
+    # here, chems should be the same as sub_chems (if given), but possibly
+    # in a different order, so we need it as one of the outputs
+
+    """ Computing the Transition Probabilities """
+    P = compute_transition_prob(R)
+
+    """ Computing the Accessibility Scores """
+    # number of authors, chemicals.. the rest will be property kewords
+    # (these are fixed given that the data base is fixed..change the former
+    # if the latter is modified)
+    nA = np.sum(col_types==0)
+    nC = np.sum(col_types==1)
+    nKW = np.sum(col_types==2)
+
+    A_inds = np.arange(nA)
+    C_inds = np.arange(nA,nA+nC)
+    KW_inds   = np.arange(nA+nC, len(col_types))
+
+    transprob_CtoKW = compute_transprob_via_1author(P,
+                                                    source_inds=C_inds,
+                                                    dest_inds=KW_inds,
+                                                    author_rows=A_inds)
+    transprob_KWtoC = compute_transprob_via_1author(P,
+                                                    source_inds=KW_inds,
+                                                    dest_inds=C_inds,
+                                                    author_rows=A_inds)
+
+    # computing two-way transition probability (accessibility score)
+    access_CtoKW = 0.5*(transprob_CtoKW + transprob_KWtoC.T)
+
+    # summarizing multiple accessibility scores for chemicals corresponding to 
+    # multiple proprety-related keywords
+    access_CtoKW = np.squeeze(np.array(np.sum(access_CtoKW, axis=1)))
+
+    return access_CtoKW, chems
+
+def accessibility_scalar_metric(R,
+                                year,
+                                memory,
+                                sub_chems,
+                                mtype='MEAN'):
+
+    years = np.arange(year-5,year)
+    yrs_scores = np.zeros((memory,len(sub_chems)))
+    for i, yr in enumerate(years):
+        scores, chems = accessibility_scores(yr, R=R)
+        # find location of elements of chems in sub_chems, so that
+        # these local scores will be loaded in correct locations
+        chems_in_subchems = helpers.locate_array_in_array(chems, sub_chems)
+        yrs_scores[i,chems_in_subchems] = scores
+
+    if mtype=='SUM':
+        scores = np.sum(yrs_scores, axis=0)
+    elif mtype=='MEAN':
+        scores = np.mean(yrs_scores, axis=0)
+    elif mtype=='MAX':
+        scores = np.max(yrs_scores, axis=0)
+
+    return scores
+
 
 def sims_two_lists(S1, S2, model, emb_types='ww'):
     """Similarity between two lists of strings

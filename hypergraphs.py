@@ -227,6 +227,77 @@ def compute_vertex_KW_submatrix(los, **kwargs):
 
     return VM
 
+def preprocess_VM(R, **kwargs):
+    """Pre-processing the vertex weight matrix (R) of a hypergraph
+    
+    If a given set of years is provided, restrict to rows to articles (hyperedges)
+    in those years. If a subset of chemicals is provided, restrict columns
+    to compounds in that subset. Finally, if told som remove empty hyperedges and isolated
+    nodes in the hypergraph so that we won't get zero-division  warnings when
+    forming inverse of the hyperedge and hypernode degree diagonal matrices
+
+    This function also returns a column-label vector that encodes types of the columns:
+    0 = author
+    1 = chemical 
+    2 = propert keyword
+
+    plus explicit order of the chemical compounds in R because at this
+    time only the order of these columns matter to us
+    
+    """
+
+    years = kwargs.get('years', [])
+    sub_chems = kwargs.get('sub_chems', [])
+    prune = kwargs.get('prune', False)
+    
+    # removing articles outside the given years
+    # (we don't need to track the order of hyperedges at this time)
+    if len(years)>0:
+        R = restrict_rows_to_years(R, years)
+
+    # what really matters to us is the order of columns not the rows,
+    # (i.e., what kind of node each column is associated with)
+    # -- we have to track the columns' order
+    # ---------------------|--------------|----------
+    #      (authors)      nA   (chems)  nC+nA   (kw)    
+    nA = 1739453
+    nC = 107466
+    nKW = R.shape[1] - nA - nC
+
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    # restricting to a subset of chemicals (if given)
+    # this does not have any effect on number of authors (nA)
+    if len(sub_chems)>0:
+        chems_indic = np.in1d(chems, sub_chems)
+        chems = chems[chems_indic]
+        nC = len(chems)
+
+        col_chems_indic = np.concatenate((np.ones(nA,dtype=bool),
+                                          chems_indic,
+                                          np.ones(nKW, dtype=bool)))
+        R = R[:, col_chems_indic]
+        
+    col_types = np.zeros(R.shape[1])
+    col_types[nA:nA+nC] = 1
+    col_types[nA+nC:] = 2
+
+    # removing empty hyperedges and isolated nodes
+    if prune:
+        R, cmask = prune_vertex_weight_matrix(R)
+
+        # vector of new chemicals (should be formed before updating nA)
+        chems = chems[cmask[nA:nA+nC]]
+        nA, nC = np.sum(cmask[:nA]), np.sum(cmask[nA:nA+nC])
+
+        col_types = np.zeros(R.shape[1])
+        col_types[nA:nA+nC] = 1
+        col_types[nA+nC:] = 2
+    
+    return R, col_types, chems
+
+
 def compute_transition_prob(R, **kwargs):
     """Computing the transition probability matrix given the
     binary (0-1) vertex weight matrix (dim.; |E|x|V|)
@@ -249,6 +320,15 @@ def compute_transition_prob(R, **kwargs):
 
 
 def prune_vertex_weight_matrix(R):
+    """Pruning a vertex weight matrix by removing empty rows and columns
+
+    This function does not change the order of columns or rows, it only removes
+    the empty ones. Therefore, it is safe to use the output binary `cmask` to 
+    get the new set of columns
+
+    E.g. if orig_cols = array([A_1,A_2,...,A_n,C_1,...,C_m,K1,...,K_p])
+        then new_cols = orig_cols[cmask] 
+    """
 
     # remove papers with zero authors and chemicals (hyperedges with no nodes!)
     mask = np.ones(R.shape[0],dtype=bool)
@@ -263,28 +343,15 @@ def prune_vertex_weight_matrix(R):
     return R, cmask
 
      
-def build_yearwise_hypergraph(years, **kwargs):
-    """Building a hypergraph for a given set of years
+def restrict_rows_to_years(R, years):
+    """Restricting a hypergraph with vertex weight matrix R to
+    a given set of years
 
-    The hypergraph will be built based on a given pre-computed vertex weight matrix,
-    or the paths to the raw sub-matrices (corresponding to authors/chemicals nodes
-    and property keywords nodes)
+    Restriction is done by keeping only the hyperedges (articles) 
+    whose date is in given years, pruning the resulting hypergraph 
+    (by removing isolated nodes) and computing the transition
+    probability matrix.
     """
-
-    """ Building General Vertex Weight Matrix (R) """
-    R = kwargs.get('R', None)
-    path_VM_core = kwargs.get('path_VM_core', None)
-    path_VM_kw = kwargs.get('path_VM_kw', None)
-
-    assert (R is not None) or \
-        ((path_VM_core is not None) and (path_VM_kw is not None)), \
-        'Either the pre-computed vertex weight matrix (R), or the paths \
-         to the submatrices need to be given.'
-
-    if R is None:
-        VM = sparse.load_npz(path_VM_core)
-        kwVM = sparse.load_npz(path_VM_kw)
-        R = sparse.hstack((VM, kwVM), 'csc')
 
     """ Restricting R to Articles in the Specified Years """
     # choosing rows (articles) associated with the given years
@@ -293,15 +360,8 @@ def build_yearwise_hypergraph(years, **kwargs):
                        YEAR(date) IN ({});'.format(yrs_arr))
     yr_pids = np.array([x[0] for x in msdb.crsr.fetchall()])
     R = R[yr_pids,:]
-
-    """ Pruning R """
-    # by removing empty hyperedges and isolated nodes
-    R, cmask = prune_vertex_weight_matrix(R)
-
-    """ Computing the Transition Probabilities """
-    P = compute_transition_prob(R)
-
-    return R, P, cmask
+    
+    return R
 
 
 def compute_transprob_via_1author(P, source_inds, dest_inds, **kwargs):
@@ -323,53 +383,4 @@ def compute_transprob_via_1author(P, source_inds, dest_inds, **kwargs):
     subR_2 = subR_2[:, dest_inds]
 
     return subR_1 @ subR_2
-
-def compute_accessability_scores(P, cmask, **kwargs):
-    """Computing accessibility between chemicals and the property keywords
-
-    Given transition probability matrix (P) does not include all the nodes, 
-    only those that are specified in `cmask` binary vector. However, the output
-    of this function will be a vector of fixed length (=`len(chems)`) such that
-    those chemicals that are not present in the current hypergraph will get -1
-    score.
-
-    Identifying node types in `P` is based on our certainty that the first chucnk
-    of P is still corresponding to authors, the second chunk to chemicals and the
-    third chunk to the property-related keywords.
-    """
-
-    assert P.shape[0]==np.sum(cmask), 'The given cmask does not match the \
-                                       dimension of P.'
-    
-    # fixing the number of authors, chemicals.. the rest will be property kewords
-    nA = 1739453
-    nC = 107466
-    nKW = len(cmask) - nA - nC
-
-    A_inds = np.arange(np.sum(cmask[:nA]))
-    C_inds = np.arange(np.sum(cmask[:nA]), np.sum(cmask[:nA+nC]))
-    KW_inds   = np.arange(np.sum(cmask[:nA+nC]), np.sum(cmask))
-
-    transprob_CtoKW = compute_transprob_via_1author(P,
-                                                    source_inds=C_inds,
-                                                    dest_inds=KW_inds,
-                                                    author_rows=A_inds)
-    transprob_KWtoC = compute_transprob_via_1author(P,
-                                                    source_inds=KW_inds,
-                                                    dest_inds=C_inds,
-                                                    author_rows=A_inds)
-
-    # computing two-way transition probability (accessibility score)
-    access_CtoKW = 0.5*(transprob_CtoKW + transprob_KWtoC.T)
-
-    # summarizing multiple accessibility scores for chemicals corresponding to 
-    # multiple proprety-related keywords
-    access_CtoKW = np.squeeze(np.array(np.sum(access_CtoKW, axis=1)))
-
-    # expanding this accessability score to containt all chemicals, even
-    # those that does not exist in this hypergraph
-    total_access_CtoKW = -np.ones(nC)
-    total_access_CtoKW[cmask[nA:nA+nC]] = access_CtoKW
-
-    return total_access_CtoKW
     
