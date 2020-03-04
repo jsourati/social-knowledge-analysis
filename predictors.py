@@ -3,6 +3,7 @@ import sys
 import pdb
 import logging
 import numpy as np
+from scipy import sparse
 
 from gensim.models import Word2Vec
 
@@ -17,7 +18,7 @@ config_path = '/home/jamshid/codes/data/sql_config_0.json'
 msdb = readers.MatScienceDB(config_path, 'msdb')
 
 
-def yr_SD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
+def ySD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
     """Returning a discovery predictor based on yearwise SD metric
     """
 
@@ -29,7 +30,7 @@ def yr_SD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
     msdb.crsr.execute('SELECT formula FROM chemical;')
     chems = np.array([x[0] for x in msdb.crsr.fetchall()])
 
-    def yr_SD_predictor(year_of_pred, sub_chems):
+    def ySD_predictor(year_of_pred, sub_chems):
 
         if sub_chems is not None:
             overlap_indic = np.in1d(chems, sub_chems)
@@ -47,15 +48,16 @@ def yr_SD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
         sub_ySD = sub_ySD[unstudied_indic,:yr_loc]
 
         """ Computing and Sorting Scores """ 
-        scores = measures.SD_metrics(sub_ySD,
-                                     mtype=scalarization,
-                                     memory=memory)
+        scores = measures.ySD_scalar_metric(sub_ySD,
+                                            mtype=scalarization,
+                                            memory=memory)
 
         sorted_inds = np.argsort(-scores)[:pred_size]
+        pdb.set_trace()
 
         return sub_chems[sorted_inds]
 
-    return yr_SD_predictor
+    return ySD_predictor
 
 
 def embedding(cocrs, years_of_cocrs_columns, path_to_wvmodel, y_term, **kwargs):
@@ -129,9 +131,9 @@ def embedding_SD_lincomb(cocrs,
         sub_ySD = sub_ySD[unstudied_indic,:yr_loc]
 
         """ Two Types of Scores """
-        scores_0 = measures.SD_metrics(sub_ySD,
-                                       mtype=scalarization,
-                                       memory=memory)
+        scores_0 = measures.ySD_scalar_metric(sub_ySD,
+                                              mtype=scalarization,
+                                              memory=memory)
         scores_1 = measures.cosine_sims(model, sub_chems, y_term)
 
         """ Normalizing Scores' Scales """
@@ -145,3 +147,48 @@ def embedding_SD_lincomb(cocrs,
         return sub_chems[sorted_inds]
 
     return embedding_SD_predictor
+
+def hypergraph_access_len2(cocrs,
+                           years_of_cocrs_columns,
+                           path_to_VM_core,
+                           path_to_VM_kw,
+                           **kwargs):
+    
+    VM = sparse.load_npz(path_to_VM_core)
+    kwVM = sparse.load_npz(path_to_VM_kw)
+    R = sparse.hstack((VM, kwVM), 'csc')
+
+    pred_size = kwargs.get('pred_size', 50)
+    memory = kwargs.get('memory', 5)
+    scalarization = kwargs.get('scalarization', 'SUM')
+
+    # get all chemicals
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    def access_score(year_of_pred, sub_chems):
+        
+        if sub_chems is not None:
+            overlap_indic = np.in1d(chems, sub_chems)
+            sub_cocrs = cocrs[overlap_indic, :]
+        else:
+            sub_chems = chems
+            sub_cocrs = cocrs
+
+        """ Restricting Attention to Unstudied Materials """
+        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
+        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
+        sub_chems = sub_chems[unstudied_indic]
+
+        scores = measures.accessibility_scalar_metric(R,
+                                                      year_of_pred,memory,
+                                                      sub_chems,
+                                                      scalarization)
+
+        sorted_inds = np.argsort(-scores)[:pred_size]
+
+        return sub_chems[sorted_inds]
+
+    return access_score
+                                                      
+
