@@ -53,7 +53,6 @@ def ySD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
                                             memory=memory)
 
         sorted_inds = np.argsort(-scores)[:pred_size]
-        pdb.set_trace()
 
         return sub_chems[sorted_inds]
 
@@ -148,17 +147,18 @@ def embedding_SD_lincomb(cocrs,
 
     return embedding_SD_predictor
 
-def hypergraph_access_len2(cocrs,
-                           years_of_cocrs_columns,
-                           path_to_VM_core,
-                           path_to_VM_kw,
-                           **kwargs):
+def hypergraph_access(cocrs,
+                      years_of_cocrs_columns,
+                      path_to_VM_core,
+                      path_to_VM_kw,
+                      **kwargs):
     
     VM = sparse.load_npz(path_to_VM_core)
     kwVM = sparse.load_npz(path_to_VM_kw)
     R = sparse.hstack((VM, kwVM), 'csc')
 
     pred_size = kwargs.get('pred_size', 50)
+    nstep = kwargs.get('nstep', 1)
     memory = kwargs.get('memory', 5)
     scalarization = kwargs.get('scalarization', 'SUM')
 
@@ -181,9 +181,11 @@ def hypergraph_access_len2(cocrs,
         sub_chems = sub_chems[unstudied_indic]
 
         scores = measures.accessibility_scalar_metric(R,
-                                                      year_of_pred,memory,
-                                                      sub_chems,
-                                                      scalarization)
+                                                      year_of_pred,
+                                                      memory,
+                                                      sub_chems=sub_chems,
+                                                      nstep=nstep,
+                                                      mtype=scalarization)
 
         sorted_inds = np.argsort(-scores)[:pred_size]
 

@@ -4,8 +4,8 @@ import pdb
 import json
 import logging
 import pymysql
-import pdb
 import numpy as np
+from scipy import sparse
 
 from gensim.models import Word2Vec
 
@@ -17,8 +17,8 @@ from data import readers
 from misc import helpers
 from training.train import MyCallBack
 from data.utils import MatTextProcessor
-from hypergraphs import compute_transition_prob, compute_transprob_via_1author, \
-   preprocess_VM
+from hypergraphs import compute_transprob, compute_multistep_transprob, \
+   restrict_rows_to_years
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
 msdb = readers.MatScienceDB(config_path, 'msdb')
@@ -235,7 +235,7 @@ def cosine_sims(model, chems, Y_term):
 
     return sims
 
-def accessibility_scores(year, **kwargs):
+def accessibility_scores(years, **kwargs):
     """Computing accessibility between chemicals and the property keywords
 
     The hypergraph will be built based on a given pre-computed vertex weight matrix,
@@ -246,13 +246,19 @@ def accessibility_scores(year, **kwargs):
     of P is still corresponding to authors, the second chunk to chemicals and the
     third chunk to the property-related keywords.
     """
-    
-    """ Building General Vertex Weight Matrix (R) """
+
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
     R = kwargs.get('R', None)
     path_VM_core = kwargs.get('path_VM_core', None)
     path_VM_kw = kwargs.get('path_VM_kw', None)
     sub_chems = kwargs.get('sub_chems', [])
+    direction = kwargs.get('direction', 'KWtoC')
+    nstep = kwargs.get('nstep', 1)
 
+    
+    """ Building General Vertex Weight Matrix (R) """
     assert (R is not None) or \
         ((path_VM_core is not None) and (path_VM_kw is not None)), \
         'Either the pre-computed vertex weight matrix (R), or the paths \
@@ -262,60 +268,90 @@ def accessibility_scores(year, **kwargs):
         VM = sparse.load_npz(path_VM_core)
         kwVM = sparse.load_npz(path_VM_kw)
         R = sparse.hstack((VM, kwVM), 'csc')
-
+        
     """ Preprocessing R """
-    R, col_types, chems = preprocess_VM(R, years=[year], prune=True)
+    R = restrict_rows_to_years(R, years)
 
     # here, chems should be the same as sub_chems (if given), but possibly
     # in a different order, so we need it as one of the outputs
 
     """ Computing the Transition Probabilities """
-    P = compute_transition_prob(R)
+    P = compute_transprob(R)
 
-    """ Computing the Accessibility Scores """
-    # number of authors, chemicals.. the rest will be property kewords
+    """ Computing Probabilities of w1-->A-->w2 and w2-->A-->w1 """
+    # number of authors, chemicals and the property kewords
     # (these are fixed given that the data base is fixed..change the former
     # if the latter is modified)
-    nA = np.sum(col_types==0)
-    nC = np.sum(col_types==1)
-    nKW = np.sum(col_types==2)
+    nA = 1739453
+    nC = 107466
+    nKW = R.shape[1] - nA - nC
 
     A_inds = np.arange(nA)
-    C_inds = np.arange(nA,nA+nC)
-    KW_inds   = np.arange(nA+nC, len(col_types))
+    KW_inds   = np.arange(nA+nC, R.shape[1])
 
-    transprob_CtoKW = compute_transprob_via_1author(P,
-                                                    source_inds=C_inds,
-                                                    dest_inds=KW_inds,
-                                                    author_rows=A_inds)
-    transprob_KWtoC = compute_transprob_via_1author(P,
-                                                    source_inds=KW_inds,
-                                                    dest_inds=C_inds,
-                                                    author_rows=A_inds)
+    # getting indices of chemicals needs more care:
+    # make sure to take into account the order of sub_chems
+    if len(sub_chems)>0:
+        overlap_inds = np.where(np.isin(chems, sub_chems))[0]
+        C_inds = nA + overlap_inds
+        new_sub_chems = chems[overlap_inds]
+        sub_chems_locs_in_scores = helpers.locate_array_in_array(sub_chems,
+                                                                 new_sub_chems)
+    else:
+        C_inds = np.arange(nA, nA+nC)
+        
 
-    # computing two-way transition probability (accessibility score)
-    access_CtoKW = 0.5*(transprob_CtoKW + transprob_KWtoC.T)
+    if direction=='CtoKW':
+        access_prob = compute_multistep_transprob(P,
+                                                  source_inds=C_inds,
+                                                  dest_inds=KW_inds,
+                                                  interm_inds=A_inds,
+                                                  nstep=nstep)
+    elif direction=='KWtoC':
+        access_prob = compute_multistep_transprob(P,
+                                                  source_inds=KW_inds,
+                                                  dest_inds=C_inds,
+                                                  interm_inds=A_inds,
+                                                  nstep=nstep).T
+    elif direction=='both_way':
+        transprob_CtoKW = compute_multistep_transprob(P,
+                                                      source_inds=C_inds,
+                                                      dest_inds=KW_inds,
+                                                      interm_inds=A_inds,
+                                                      nstep=nstep)
+        transprob_KWtoC = compute_multistep_transprob(P,
+                                                      source_inds=KW_inds,
+                                                      dest_inds=C_inds,
+                                                      interm_inds=A_inds,
+                                                      nstep=nstep)
+        
+        # the Symmetric Accessibility Scores
+        # computing two-way transition probability (accessibility score)
+        access_prob = 0.5*(transprob_CtoKW + transprob_KWtoC.T)
+
 
     # summarizing multiple accessibility scores for chemicals corresponding to 
     # multiple proprety-related keywords
-    access_CtoKW = np.squeeze(np.array(np.sum(access_CtoKW, axis=1)))
+    access_prob = np.squeeze(np.array(np.sum(access_prob, axis=1)))
 
-    return access_CtoKW, chems
+    # reorder the final scores, if sub_chems is given
+    if len(sub_chems)>0:
+        access_prob = access_prob[sub_chems_locs_in_scores]
+
+    return access_prob
 
 def accessibility_scalar_metric(R,
                                 year,
                                 memory,
-                                sub_chems,
+                                sub_chems=[],
+                                nstep=1,
                                 mtype='MEAN'):
 
-    years = np.arange(year-5,year)
+    years = np.arange(year-memory,year)
     yrs_scores = np.zeros((memory,len(sub_chems)))
     for i, yr in enumerate(years):
-        scores, chems = accessibility_scores(yr, R=R)
-        # find location of elements of chems in sub_chems, so that
-        # these local scores will be loaded in correct locations
-        chems_in_subchems = helpers.locate_array_in_array(chems, sub_chems)
-        yrs_scores[i,chems_in_subchems] = scores
+        scores = accessibility_scores([yr], R=R, sub_chems=sub_chems, nstep=nstep)
+        yrs_scores[i,:] = scores
 
     if mtype=='SUM':
         scores = np.sum(yrs_scores, axis=0)
