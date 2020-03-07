@@ -298,25 +298,22 @@ def preprocess_VM(R, **kwargs):
     return R, col_types, chems
 
 
-def compute_transition_prob(R, **kwargs):
+def compute_transprob(R):
     """Computing the transition probability matrix given the
     binary (0-1) vertex weight matrix (dim.; |E|x|V|)
     """
 
-    # setting up the logger
-    logger_disable = kwargs.get('logger_disable', False)
-    logfile_path   = kwargs.get('logfile_path', None)
-    logfile_mode   = kwargs.get('logfile_modeo', 'w')
-    logger = helpers.set_up_logger(__name__, logfile_path,
-                                   logger_disable,
-                                   logfile_mode)
+    row_collapse = np.array(np.sum(R,axis=0))[0,:]
+    iDV = np.zeros(len(row_collapse), dtype=float)
+    iDV[row_collapse>0] = 1./row_collapse[row_collapse>0]
+    iDV = sparse.diags(iDV, format='csr')
+
+    col_collapse = np.array(np.sum(R,axis=1))[:,0]
+    iDE = np.zeros(len(col_collapse), dtype=float)
+    iDE[col_collapse>0] = 1./col_collapse[col_collapse>0]
+    iDE = sparse.diags(iDE, format='csr')
     
-    iDV = sparse.diags(np.squeeze(1/np.array(np.sum(R,axis=0))))
-    iDV = iDV.tocsr()
-    iDE = sparse.diags(np.squeeze(1/np.array(np.sum(R,axis=1))))
-    iDE = iDE.tocsr()
-    
-    return iDV @ R.T @ iDE @ R
+    return iDV * R.T * iDE * R
 
 
 def prune_vertex_weight_matrix(R):
@@ -364,23 +361,41 @@ def restrict_rows_to_years(R, years):
     return R
 
 
-def compute_transprob_via_1author(P, source_inds, dest_inds, **kwargs):
-    """Computing transition probabilities of a set of conceptual nodes 
-    to a set of destination nodes
+def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
+    """Computing probability of multi-step transitions between two sets of nodes
+    via a third intermediary set of nodes
     """
 
-    author_rows = kwargs.get('author_rows', None)
+    interm_inds = kwargs.get('interm_inds', None)
+    nstep = kwargs.get('nstep', 1)
 
-    if author_rows is None:
+    if interm_inds is None:
         # number of authors 
         msdb.crsr.execute('SELECT COUNT(*) FROM author;')
         nA = msdb.crsr.fetchone()[0]
-        author_rows = np.arange(nA)
+        interm_inds = np.arange(nA)
 
-    subR_1 = P[:,author_rows]
-    subR_1 = subR_1[source_inds, :]
-    subR_2 = P[author_rows,:]
-    subR_2 = subR_2[:, dest_inds]
+    source_subP = P[source_inds,:]
+    dest_subP = P[:,dest_inds]
 
-    return subR_1 @ subR_2
+    if nstep == 1:
+        return source_subP[:,dest_inds]
+    
+    elif nstep==2:
+        return source_subP[:,interm_inds] * dest_subP[interm_inds,:]
+    
+    elif nstep > 2:
+        # for nstep=t, we need to have
+        # P[source,A] * P[A,A]^t * P[A,dest] =
+        # (((P[source,A] * P[A,A]) * P[A,A]) * ... ) * P[A,A] * P[A,inds]
+        #               |------------------------------------|
+        #                multiply for t times (preserve the order)
+        #
+
+        interm_subP = P[interm_inds,:][:,interm_inds]    #P[A,A]
+        left_mat = source_subP[:,interm_inds] * interm_subP
+        for t in range(1,nstep-2):
+            left_mat = left_mat * interm_subP
+        return left_mat * dest_subP[interm_inds,:]
+        
     
