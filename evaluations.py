@@ -173,7 +173,7 @@ def compare_emb_yrSD(model_paths_dict,
                                                           model_chems[unstudied_ents],
                                                           y)
             embedd_scores = np.mean(embedd_scores[np.sum(embedd_scores,axis=1)!=0,:], axis=0)
-        sd_scores = measures.SD_metrics(sub_yr_SDs[unstudied_ents, :yr_loc],
+        sd_scores = measures.ySD_scalar_metric(sub_yr_SDs[unstudied_ents, :yr_loc],
                                         mtype=sd_score_type,
                                         memory=memory)
 
@@ -211,7 +211,8 @@ def eval_predictor(chems,
     path_to_wvmodel = kwargs.get('path_to_wvmodel', None)
     count_threshold = kwargs.get('count_threshold', 0)
     logfile_path = kwargs.get('logfile_path', None)
-    logger = helpers.set_up_logger(__name__, logfile_path, False)
+    logger_disable = kwargs.get('logger_disable',False)
+    logger = helpers.set_up_logger(__name__, logfile_path, logger_disable)
 
     """ Restricting to Model Vocabulary (if necessasry) """
     # if a model is given, consider the subset of chemicals that exist in the
@@ -230,20 +231,15 @@ def eval_predictor(chems,
         logger.info('{} chemicals are extracted from the vocabulary.'.format(len(model_chems)))
 
         # get the intersection between the extracted chemicals and the full set
-        logger.info('There are {} chemicals removed from model chemicals because \
-                     they were missing in the full chemical set'.format(
-                         len(set(model_chems)-set(chems))))
-        
-        model_chems = list(set(model_chems).intersection(set(chems)))
-        model_chems_indic_in_full = np.in1d(chems, np.array(model_chems))
-        
-        # this is the actual order of materials we will consider in model chemicals
+        model_chems_indic_in_full = np.in1d(chems, model_chems)
         sub_chems = chems[model_chems_indic_in_full]
-        
+        logger.info('There are {} chemicals removed from model chemicals because' \
+                    'they were missing in the full chemical set'.format(
+                         np.sum(~model_chems_indic_in_full)))
         logger.info('Number of total chemicals after correction: {}'.format(len(sub_chems)))
 
     else:
-        # having sub_chems as None should mean that the gt/predictor should consider all chemicals
+        # having sub_chems equal to None mean that gt/predictor should consider all chemicals
         sub_chems = None
 
 

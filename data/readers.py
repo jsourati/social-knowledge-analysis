@@ -314,7 +314,7 @@ class MatScienceDB(object):
         cols = kwargs.get('cols',['paper_id'])
         cols = [col if '.' in col else 'P.{}'.format(col) for col in cols]
         pcols = ','.join(cols)
-        yrs = kwargs.get('yrs', [])
+        years = kwargs.get('years', [])
         case_sensitives = kwargs.get('case_sensitives', [])
         logical_comb = kwargs.get('logical_comb', 'OR')
 
@@ -325,8 +325,8 @@ class MatScienceDB(object):
             constraints_str[idx] = 'P.abstract LIKE BINARY "%{}%"'.format(k)
         constraints_str = ' {} '.format(logical_comb).join(constraints_str)
 
-        if len(yrs)>0:
-            yrs_arr = ','.join([str(x) for x in yrs])
+        if len(years)>0:
+            yrs_arr = ','.join([str(x) for x in years])
             constraints_str = '({}) AND YEAR(P.date) IN ({})'.format(
                 constraints_str, yrs_arr)
 
