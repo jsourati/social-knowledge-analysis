@@ -100,7 +100,7 @@ def compute_vertex_KW_submatrix(los, **kwargs):
     return VM
 
 
-def first_time_KWC_cocrs(R, year, **kwargs):
+def year_discoveries(R, year, **kwargs):
     """Finding cooccurrences between the set of entities with at least 
     one of the property-related keywords that happened for the first 
     time in a given year
@@ -151,6 +151,15 @@ def first_time_KWC_cocrs(R, year, **kwargs):
     else:
         return new_studied_ents 
 
+def year_discoverers(R, year, **kwargs):
+
+    kwargs['return_papers'] = True
+    disc_ents, papers = year_discoveries(R, year, **kwargs)
+    paper_ids = np.concatenate([pids for _,pids in papers.items()])
+    discoverers = msdb.get_authors_by_paper_ids(paper_ids, cols=['author_id'])
+
+    return np.concatenate([auids['author_id'] for _,auids in discoverers.items()])
+    
 
 def compute_transprob(R):
     """Computing the transition probability matrix given the
