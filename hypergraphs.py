@@ -100,6 +100,58 @@ def compute_vertex_KW_submatrix(los, **kwargs):
     return VM
 
 
+def first_time_KWC_cocrs(R, year, **kwargs):
+    """Finding cooccurrences between the set of entities with at least 
+    one of the property-related keywords that happened for the first 
+    time in a given year
+    """
+
+    chems = kwargs.get('chems', [])
+    row_years = kwargs.get('row_years', [])
+    return_papers = kwargs.get('return_papers', False)
+
+    if len(chems)==0:
+        msdb.crsr.execute('SELECT formula FROM chemical;')
+        chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    if len(row_years)==0:
+        msdb.crsr.execute('SELECT YEAR(date) FROM paper;')
+        row_years = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+        
+    nA = 1739453
+    nC = 107466
+    nKW = R.shape[1] - nA - nC
+
+    # entities unstudied in the previous years
+    KW_pubs = np.sum(R[row_years < year,-nKW:], axis=1)
+    C_pubs  = R[row_years < year,nA:nA+nC]
+    unstudied_ents = np.asarray(np.sum(C_pubs.multiply(KW_pubs),axis=0)==0)[0,:]
+
+    # entities studied this year
+    KW_pubs = np.sum(R[row_years==year,-nKW:], axis=1)
+    C_pubs  = R[row_years==year,nA:nA+nC]
+    CKW_pubs = C_pubs.multiply(KW_pubs).tocsc()
+    yr_studied_ents = np.asarray(np.sum(CKW_pubs,axis=0)>0)[0,:]
+
+    new_studied_ents = chems[unstudied_ents * yr_studied_ents]
+    
+    if return_papers:
+        # we explicitly need row indices associated with the discovery year, so
+        # that discovery papers can be returned through their IDs 
+        year_pids = np.where(row_years==year)[0]
+
+        new_studied_ents_inds = np.where(unstudied_ents * yr_studied_ents)[0]
+        new_studies_papers = {}
+        for idx in new_studied_ents_inds:
+            new_studies_papers[chems[idx]] = year_pids[
+                np.where((CKW_pubs[:,idx]>0).toarray())[0]]
+
+        return new_studied_ents, new_studies_papers
+    else:
+        return new_studied_ents 
+
+
 def compute_transprob(R):
     """Computing the transition probability matrix given the
     binary (0-1) vertex weight matrix (dim.; |E|x|V|)
