@@ -10,6 +10,7 @@ path = '/home/jamshid/codes/social-knowledge-analysis'
 sys.path.insert(0, path)
 
 import measures
+import hypergraphs
 from misc import helpers
 from data import utils, readers
 
@@ -258,7 +259,23 @@ def eval_predictor(chems,
     return np.cumsum(accs)
 
 
-def gt_disc(cocrs, years_of_cocrs_columns):
+def eval_author_predictor(discoverers_predictor_func,
+                          gt_discoverers_func,
+                          year_of_pred,
+                          **kwargs):
+
+    preds = discoverers_predictor_func(year_of_pred)
+
+    years_of_eval = np.arange(year_of_pred, 2019)
+    accs = np.zeros(len(years_of_eval))
+    for i, yr in enumerate(years_of_eval):
+        gt = gt_discoverers_func(yr)
+        accs[i] = np.sum(np.in1d(preds, gt)) / len(preds)
+        
+    return accs
+
+
+def gt_discoveries(cocrs, years_of_cocrs_columns):
     """Generating ground truth discoveries in a given year
     """
     
@@ -280,5 +297,29 @@ def gt_disc(cocrs, years_of_cocrs_columns):
 
     return gt_disc_func
     
-    
-    
+
+def gt_discoverers(**kwargs):
+
+    R = kwargs.get('R', None)
+    path_VM_core = kwargs.get('path_VM_core', None)
+    path_VM_kw = kwargs.get('path_VM_kw', None)
+
+    """ Building General Vertex Weight Matrix (R) """
+    assert (R is not None) or \
+        ((path_VM_core is not None) and (path_VM_kw is not None)), \
+        'Either the pre-computed vertex weight matrix (R), or the paths \
+         to the submatrices need to be given.'
+
+    if R is None:
+        VM = sparse.load_npz(path_VM_core)
+        kwVM = sparse.load_npz(path_VM_kw)
+        R = sparse.hstack((VM, kwVM), 'csc')
+
+    def gt_discoverers_func(year_of_pred):
+        if 'R' in kwargs: del kwargs['R']
+        auids = hypergraphs.year_discoverers(R,
+                                             year_of_pred,
+                                             )
+        return auids
+
+    return gt_discoverers_func

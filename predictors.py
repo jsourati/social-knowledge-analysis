@@ -192,5 +192,34 @@ def hypergraph_access(cocrs,
         return sub_chems[sorted_inds]
 
     return access_score
-                                                      
+
+
+def hypergraph_author_accesss(path_to_VM_core,
+                              path_to_VM_kw,
+                              **kwargs):
+
+    VM = sparse.load_npz(path_to_VM_core)
+    kwVM = sparse.load_npz(path_to_VM_kw)
+    R = sparse.hstack((VM, kwVM), 'csc')
+
+    pred_size = kwargs.get('pred_size', 50)
+    nstep = kwargs.get('nstep', 1)
+    memory = kwargs.get('memory', 5)
+
+    # get all chemicals
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    def author_access_scores(year_of_pred):
+
+        scores = measures.author_accessibility_scalar_score(R,
+                                                            year_of_pred,
+                                                            memory)
+
+        sorted_inds = np.argsort(-scores)[:pred_size]
+
+        return sorted_inds
+
+    return author_access_scores
+
 
