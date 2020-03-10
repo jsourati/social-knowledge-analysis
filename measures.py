@@ -329,7 +329,14 @@ def accessibility_scores(years, **kwargs):
         # computing two-way transition probability (accessibility score)
         access_prob = 0.5*(transprob_CtoKW + transprob_KWtoC.T)
 
+    elif direction=='KWtoA':
+        access_prob = compute_multistep_transprob(P,
+                                                  source_inds=KW_inds,
+                                                  dest_inds=A_inds,
+                                                  interm_inds=C_inds,
+                                                  nstep=nstep).T
 
+        
     # summarizing multiple accessibility scores for chemicals corresponding to 
     # multiple proprety-related keywords
     access_prob = np.squeeze(np.array(np.sum(access_prob, axis=1)))
@@ -361,6 +368,31 @@ def accessibility_scalar_metric(R,
         scores = np.max(yrs_scores, axis=0)
 
     return scores
+
+def author_accessibility_scalar_score(R,
+                                      year,
+                                      memory):
+
+    nA = 1739453
+    nC = 107466
+    A_inds = np.arange(nA)
+    C_inds = np.arange(nA, nA+nC)
+    KW_inds = np.arange(nA+nC, R.shape[1])
+    
+    years = np.arange(year-memory,year)
+    yrs_scores = np.zeros((memory, nA))
+    for i,yr in enumerate(years):
+        
+        Rs = restrict_rows_to_years(R, [yr])
+        P = compute_transprob(Rs)
+        yrs_scores[i,:] = compute_multistep_transprob(P,
+                                                      source_inds=KW_inds,
+                                                      dest_inds=A_inds,
+                                                      interm_inds=C_inds,
+                                                      nstep=2).toarray()[0,:]
+
+    return np.sum(yrs_scores,axis=0)
+
 
 
 def sims_two_lists(S1, S2, model, emb_types='ww'):
