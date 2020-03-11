@@ -210,13 +210,16 @@ def hypergraph_author_accesss(path_to_VM_core,
     msdb.crsr.execute('SELECT formula FROM chemical;')
     chems = np.array([x[0] for x in msdb.crsr.fetchall()])
 
-    def author_access_scores(year_of_pred):
+    def author_access_scores(year_of_pred, size=0):
 
+        if size==0:
+            size=pred_size
+        
         scores = measures.author_accessibility_scalar_score(R,
                                                             year_of_pred,
                                                             memory)
 
-        sorted_inds = np.argsort(-scores)[:pred_size]
+        sorted_inds = np.argsort(-scores)[:size]
 
         return sorted_inds
 

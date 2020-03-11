@@ -264,12 +264,19 @@ def eval_author_predictor(discoverers_predictor_func,
                           year_of_pred,
                           **kwargs):
 
-    preds = discoverers_predictor_func(year_of_pred)
+    fixed_size = kwargs.get('fixed_size', True)
+
+    if fixed_size:
+        preds = discoverers_predictor_func(year_of_pred)
 
     years_of_eval = np.arange(year_of_pred, 2019)
     accs = np.zeros(len(years_of_eval))
     for i, yr in enumerate(years_of_eval):
-        gt = gt_discoverers_func(yr)
+        gt = np.unique(gt_discoverers_func(yr))
+        
+        if not(fixed_size):
+            preds = discoverers_predictor_func(year_of_pred, len(gt))
+            
         accs[i] = np.sum(np.in1d(preds, gt)) / len(preds)
         
     return accs
