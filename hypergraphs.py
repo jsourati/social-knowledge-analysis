@@ -6,6 +6,7 @@ import logging
 import pymysql
 import numpy as np
 from scipy import sparse
+from collections import deque
 
 from gensim.models import Word2Vec
 
@@ -100,6 +101,17 @@ def compute_vertex_KW_submatrix(los, **kwargs):
     return VM
 
 
+def find_neighbors(idx, R):
+    """Returning neighbors of a node indexed by `idx`
+    """
+
+    # indices of the hyperedges
+    he_inds = R[:,idx].indices
+    nbr_indic = R[he_inds,:].sum(axis=0)
+
+    return np.where(nbr_indic)[1]
+
+
 def year_discoveries(R, year, **kwargs):
     """Finding cooccurrences between the set of entities with at least 
     one of the property-related keywords that happened for the first 
@@ -160,48 +172,6 @@ def year_discoverers(R, year, **kwargs):
 
     return np.concatenate([auids['author_id'] for _,auids in discoverers.items()])
     
-
-def compute_transprob(R):
-    """Computing the transition probability matrix given the
-    binary (0-1) vertex weight matrix (dim.; |E|x|V|)
-    """
-
-    row_collapse = np.array(np.sum(R,axis=0))[0,:]
-    iDV = np.zeros(len(row_collapse), dtype=float)
-    iDV[row_collapse>0] = 1./row_collapse[row_collapse>0]
-    iDV = sparse.diags(iDV, format='csr')
-
-    col_collapse = np.array(np.sum(R,axis=1))[:,0]
-    iDE = np.zeros(len(col_collapse), dtype=float)
-    iDE[col_collapse>0] = 1./col_collapse[col_collapse>0]
-    iDE = sparse.diags(iDE, format='csr')
-    
-    return iDV * R.T * iDE * R
-
-
-def prune_vertex_weight_matrix(R):
-    """Pruning a vertex weight matrix by removing empty rows and columns
-
-    This function does not change the order of columns or rows, it only removes
-    the empty ones. Therefore, it is safe to use the output binary `cmask` to 
-    get the new set of columns
-
-    E.g. if orig_cols = array([A_1,A_2,...,A_n,C_1,...,C_m,K1,...,K_p])
-        then new_cols = orig_cols[cmask] 
-    """
-
-    # remove papers with zero authors and chemicals (hyperedges with no nodes!)
-    mask = np.ones(R.shape[0],dtype=bool)
-    mask[np.array(np.sum(R,axis=1))[:,0]==0] = 0
-    R = R.tocsr()[mask,:]
-
-    # remove isolated nodes (nodes that are not in any hyperedges)
-    cmask = np.ones(R.shape[1],dtype=bool)
-    cmask[np.array(np.sum(R,axis=0))[0,:]==0] = 0
-    R = R.tocsc()[:,cmask]
-    
-    return R, cmask
-
      
 def restrict_rows_to_years(R, years):
     """Restricting a hypergraph with vertex weight matrix R to
@@ -222,6 +192,24 @@ def restrict_rows_to_years(R, years):
     R = R[yr_pids,:]
     
     return R
+
+
+def compute_transprob(R):
+    """Computing the transition probability matrix given the
+    binary (0-1) vertex weight matrix (dim.; |E|x|V|)
+    """
+
+    row_collapse = np.array(np.sum(R,axis=0))[0,:]
+    iDV = np.zeros(len(row_collapse), dtype=float)
+    iDV[row_collapse>0] = 1./row_collapse[row_collapse>0]
+    iDV = sparse.diags(iDV, format='csr')
+
+    col_collapse = np.array(np.sum(R,axis=1))[:,0]
+    iDE = np.zeros(len(col_collapse), dtype=float)
+    iDE[col_collapse>0] = 1./col_collapse[col_collapse>0]
+    iDE = sparse.diags(iDE, format='csr')
+    
+    return iDV * R.T * iDE * R
 
 
 def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
@@ -260,5 +248,41 @@ def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
         for t in range(1,nstep-2):
             left_mat = left_mat * interm_subP
         return left_mat * dest_subP[interm_inds,:]
-        
+
     
+
+def bfs(R, start_idx, stopping_points=[]):
+    """Breadth first search algorithm for strating from a 
+    given point and returning its connected component
+
+    If a set of stopping points are given, the BFS algorithm
+    stops each time it encounters an index in stoppin_points (ignoring
+    all its neighbors and children), and the output will
+    be a subset of stopping points that are in the same 
+    connected component
+    """
+
+    logger = helpers.set_up_logger(__name__, None,False)
+
+    dists = {start_idx: 0}
+    final_dists = {start_idx: 0}
+    Q = deque([start_idx])
+
+    while len(Q)>0:
+        v = Q.popleft()
+        for u in find_neighbors(v,R):
+            if u not in dists:
+                if u not in stopping_points:
+                    dists[u] = dists[v]+1
+                    Q.append(u)
+                else:
+                    final_dists[u] = dists[v]+1
+                    dists[u] = dists[v]+1
+                    if not(len(final_dists)%100):
+                        logger.info('Final destinations: {}'.format(len(final_dists)))
+
+    if len(stopping_points)>0:
+        return final_dists
+    else:
+        return dists
+                    
