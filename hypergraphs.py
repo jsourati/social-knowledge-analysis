@@ -250,7 +250,7 @@ def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
         return left_mat * dest_subP[interm_inds,:]
 
 
-def random_walk_seq(R, start_idx, L, lazy=True):
+def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None):
     """Generating a random walk with a specific length and from 
     a starting point 
     """
@@ -274,17 +274,78 @@ def random_walk_seq(R, start_idx, L, lazy=True):
 
         # selecting a node inside e
         row = R[e,:].tocsr()
+        e_nodes = row.indices
+        
         if not(lazy):
             row[0,v]=0
-        e_nodes = row.indices
-        node_weights = row.data
-        nind = (node_weights/node_weights.sum()).cumsum().searchsorted(np.random.sample())
+            e_nodes = list(e_nodes)
+            e_nodes.remove(v)
+            e_nodes = np.array(e_nodes)
+            # if no other node remains in the paper, exit
+            if len(e_nodes)==0:
+                return seq
+            
+            
+        if node_weight_func is None:
+            node_weights = row.data
+            node_weights = node_weights/node_weights.sum()
+        else:
+            arr_row = np.float32(row.toarray())[0,:]
+            node_weights = node_weight_func(arr_row)
+            node_weights = node_weights[node_weights>0]
+
+        nind = node_weights.cumsum().searchsorted(np.random.sample())
         v = e_nodes[nind]
 
         seq += [v]
 
     return seq
+
+
+def gen_DeepWalk_sentences(R,
+                           chem_to_author_ratio,
+                           length,
+                           size):
+    """Generating a sequence of random walks starting from the last column
+    of the vertex weight matrix
+    """
+
+    nA = 1739453
+    nC = 107466
+
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+    
+    f = lambda data: node_weighting_1(data, chem_to_author_ratio)
+
+    sents = []
+    for i in range(size):
+        seq = random_walk_seq(R, R.shape[1]-1, length, lazy=False, node_weight_func=f)
+        toks = ['a_{}'.format(s) if s<nA else
+                (chems[s-nA] if nA<=s<nA+nC else 'thermoelectric') for s in seq]
+        sent = ' '.join(toks) + '.'
+
+        sents += [sent]
+
+    return sents
+
+def node_weighting_1(data, alpha):
+    """Giving weights to existing nodes in a hyperedge  such that
+    the probabiliy of choosing chemical nodes is alpha times the
+    probability of choosing an author node in each random walk step
+    """
+
+    nA = 1739453
+    nC = 107466
+    
+    A = np.sum(data[:nA]) + data[-1]  # assume data[-1]=KW
+    C = np.sum(data[nA:nA+nC])
+    if A>0 and C>0:
+        data[:nA] = data[:nA] / ((alpha+1)*A)
+        data[-1] = data[-1] / ((alpha+1)*A)
+        data[nA:nA+nC] = alpha*data[nA:nA+nC] /  ((alpha+1)*C)
         
+    return data
 
 def bfs(R, start_idx, stopping_points=[]):
     """Breadth first search algorithm for strating from a 
