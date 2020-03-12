@@ -249,7 +249,42 @@ def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
             left_mat = left_mat * interm_subP
         return left_mat * dest_subP[interm_inds,:]
 
+
+def random_walk_seq(R, start_idx, L, lazy=True):
+    """Generating a random walk with a specific length and from 
+    a starting point 
+    """
+
+
+    R = R.tocsc()
+    seq = [start_idx]
+
+    if not(lazy) and (np.sum(R[:,start_idx])==0):
+        print("Non-lazy random walk cannot start from an isolated vertex.")
+        return None
     
+    v = start_idx
+    for i in range(L-1):
+        
+        # selecting edge
+        v_edges = R[:,v].indices
+        edge_weights = R[:,v].data        
+        eind = (edge_weights/edge_weights.sum()).cumsum().searchsorted(np.random.sample())
+        e = v_edges[eind]
+
+        # selecting a node inside e
+        row = R[e,:].tocsr()
+        if not(lazy):
+            row[0,v]=0
+        e_nodes = row.indices
+        node_weights = row.data
+        nind = (node_weights/node_weights.sum()).cumsum().searchsorted(np.random.sample())
+        v = e_nodes[nind]
+
+        seq += [v]
+
+    return seq
+        
 
 def bfs(R, start_idx, stopping_points=[]):
     """Breadth first search algorithm for strating from a 
@@ -264,22 +299,35 @@ def bfs(R, start_idx, stopping_points=[]):
 
     logger = helpers.set_up_logger(__name__, None,False)
 
+    visited = [start_idx]
     dists = {start_idx: 0}
     final_dists = {start_idx: 0}
     Q = deque([start_idx])
 
+
+    logcnt = 100
     while len(Q)>0:
         v = Q.popleft()
-        for u in find_neighbors(v,R):
-            if u not in dists:
-                if u not in stopping_points:
-                    dists[u] = dists[v]+1
-                    Q.append(u)
-                else:
-                    final_dists[u] = dists[v]+1
-                    dists[u] = dists[v]+1
-                    if not(len(final_dists)%100):
-                        logger.info('Final destinations: {}'.format(len(final_dists)))
+        N = find_neighbors(v,R)
+
+        # consider only the unvisited points
+        N = N[~np.isin(N,visited)]
+        dists.update({u: dists[v]+1 for u in N})
+        visited += list(N)
+        
+        stop_indic = np.isin(N, stopping_points)
+        u_stops = N[stop_indic]
+        u_nonstops = N[~stop_indic]
+        
+        # only add non-stopping points to the queue
+        Q.extend(list(u_nonstops))
+        
+        # add stopping points to final_dists
+        final_dists.update({u: dists[v]+1 for u in u_stops})
+        
+        if len(final_dists)>logcnt:
+            logger.info('Length of added stops: {}, length of queue: {}'.format(len(final_dists), len(Q)))
+            logcnt += 100
 
     if len(stopping_points)>0:
         return final_dists
