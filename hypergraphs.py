@@ -305,7 +305,9 @@ def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None):
 def gen_DeepWalk_sentences(R,
                            chem_to_author_ratio,
                            length,
-                           size):
+                           size,
+                           file_path=None,
+                           logger=None):
     """Generating a sequence of random walks starting from the last column
     of the vertex weight matrix
     """
@@ -326,6 +328,17 @@ def gen_DeepWalk_sentences(R,
         sent = ' '.join(toks) + '.'
 
         sents += [sent]
+
+        if not(i%500) and i>0:
+            if file_path is not None:
+                with open(file_path, 'a') as tfile:
+                    tfile.write('\n'.join(sents[i-500:i]))
+                    nlines = i
+                logger.info('{} randm walks are saved'.format(i))
+
+    if file_path is not None:
+        with open(file_path, 'a') as f:
+            f.write('\n'.join(sents[nlines:]))
 
     return sents
 

@@ -547,9 +547,9 @@ class MatScienceDB(object):
         
     def collect_authors_new_discoveries(self, full_chems,
                                         cocrs,
-                                        yr_SDs,
                                         Y_terms,
-                                        yrs):
+                                        yrs,
+                                        **kwargs):
         """Collecting authors of papers with new co-occurrences (new discoveries)
         and extracting their previous papers on the topic of the property and/or
         the newly studied molecule
@@ -557,7 +557,7 @@ class MatScienceDB(object):
 
         case_sensitives = kwargs.get('case_sensitives', [])
         logfile_path = kwargs.get('logfile_path', None)
-        savefile_path = kw.args('savefile_path', None)
+        savefile_path = kwargs.get('savefile_path', None)
         start_yr = kwargs.get('start_yr', 2001)
         yr_Y_authors = kwargs.get('yr_Y_authors', None)
         yr_Y_papers = kwargs.get('yr_Y_papers', None)

@@ -59,7 +59,7 @@ def ySD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
     return ySD_predictor
 
 
-def embedding(cocrs, years_of_cocrs_columns, path_to_wvmodel, y_term, **kwargs):
+def embedding(cocrs, years_of_cocrs_columns, model_or_path, y_term, **kwargs):
 
     pred_size = kwargs.get('pred_size', 50)
     
@@ -67,7 +67,10 @@ def embedding(cocrs, years_of_cocrs_columns, path_to_wvmodel, y_term, **kwargs):
     msdb.crsr.execute('SELECT formula FROM chemical;')
     chems = np.array([x[0] for x in msdb.crsr.fetchall()])
 
-    model = Word2Vec.load(path_to_wvmodel)
+    if isinstance(model_or_path, str):
+        model = Word2Vec.load(model_or_path)
+    else:
+        model = model_or_path
 
     
     def embedding_predictor(year_of_pred, sub_chems):

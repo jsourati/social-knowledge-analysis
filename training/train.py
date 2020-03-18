@@ -58,9 +58,11 @@ class W2V(object):
                     'common_terms', 'exclude_punct', 'include_phrases']:
             self.logger.info('\t{}: {}'.format(key, self.pars[key]))
 
-
         self.logger.info('='*20 + 'Gensim logging starts' + '='*20)
+
+        
         sentences = LineSentence(self.path_to_data)
+            
         self.sentences, self.phrases = wordgrams(sentences,
                                                  self.pars['depth'],
                                                  self.pars['phrase_count'],
@@ -149,8 +151,9 @@ class MyCallBack(CallbackAny2Vec):
                 model.save(self.model_save_path)
 
             if self.logger is not None:
-                self.logger.info('{} Epoch(s) done. Loss: {}'.format(self.epoch,
-                                                                     self.losses[-1]))
+                self.logger.info('{} Epoch(s) done. Loss: {}, LR: {}'.format(self.epoch,
+                                                                           self.losses[-1],
+                                                                           model.min_alpha_yet_reached))
 
 
 class SDclassifier(object):
