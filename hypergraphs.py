@@ -250,7 +250,7 @@ def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
         return left_mat * dest_subP[interm_inds,:]
 
 
-def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None):
+def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None, rand_seed=None):
     """Generating a random walk with a specific length and from 
     a starting point 
     """
@@ -262,14 +262,20 @@ def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None):
     if not(lazy) and (np.sum(R[:,start_idx])==0):
         print("Non-lazy random walk cannot start from an isolated vertex.")
         return None
-    
+
+    if rand_seed is not None:
+        randgen = np.random.RandomState(rand_seed).random
+    else:
+        randgen = np.random.sample
+
     v = start_idx
     for i in range(L-1):
         
         # selecting edge
         v_edges = R[:,v].indices
-        edge_weights = R[:,v].data        
-        eind = (edge_weights/edge_weights.sum()).cumsum().searchsorted(np.random.sample())
+        edge_weights = R[:,v].data
+        
+        eind = (edge_weights/edge_weights.sum()).cumsum().searchsorted(randgen())
         e = v_edges[eind]
 
         # selecting a node inside e
@@ -294,7 +300,7 @@ def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None):
             node_weights = node_weight_func(arr_row)
             node_weights = node_weights[node_weights>0]
 
-        nind = node_weights.cumsum().searchsorted(np.random.sample())
+        nind = node_weights.cumsum().searchsorted(randgen())
         v = e_nodes[nind]
 
         seq += [v]
@@ -302,12 +308,13 @@ def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None):
     return seq
 
 
-def gen_DeepWalk_sentences(R,
-                           chem_to_author_ratio,
-                           length,
-                           size,
-                           file_path=None,
-                           logger=None):
+def gen_DeepWalk_sentences_fromKW(R,
+                                  chem_to_author_ratio,
+                                  length,
+                                  size,
+                                  file_path=None,
+                                  rand_seed=None,
+                                  logger=None):
     """Generating a sequence of random walks starting from the last column
     of the vertex weight matrix
     """
@@ -320,9 +327,17 @@ def gen_DeepWalk_sentences(R,
     
     f = lambda data: node_weighting_1(data, chem_to_author_ratio)
 
+    increments = None
+    if rand_seed is not None:
+        increments = np.arange(100,size*100+1,size)
+        np.random.shuffle(increments)
+
     sents = []
     for i in range(size):
-        seq = random_walk_seq(R, R.shape[1]-1, length, lazy=False, node_weight_func=f)
+        seq = random_walk_seq(R, R.shape[1]-1, length,
+                              lazy=False,
+                              node_weight_func=f,
+                              rand_seed=None if rand_seed is None else rand_seed+increments[i])
         toks = ['a_{}'.format(s) if s<nA else
                 (chems[s-nA] if nA<=s<nA+nC else 'thermoelectric') for s in seq]
         sent = ' '.join(toks) + '.'
@@ -332,7 +347,7 @@ def gen_DeepWalk_sentences(R,
         if not(i%500) and i>0:
             if file_path is not None:
                 with open(file_path, 'a') as tfile:
-                    tfile.write('\n'.join(sents[i-500:i]))
+                    tfile.write('\n'.join(sents[i-500:i])+'\n')
                     nlines = i
                 logger.info('{} randm walks are saved'.format(i))
 
@@ -357,6 +372,10 @@ def node_weighting_1(data, alpha):
         data[:nA] = data[:nA] / ((alpha+1)*A)
         data[-1] = data[-1] / ((alpha+1)*A)
         data[nA:nA+nC] = alpha*data[nA:nA+nC] /  ((alpha+1)*C)
+    elif A>0 and C==0:
+        data[:nA] = data[:nA]/A
+    elif A==0 and C>0:
+        data[nA:nA+nC] = data[nA:nA+nC]/C
         
     return data
 
