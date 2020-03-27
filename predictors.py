@@ -11,6 +11,7 @@ path = '/home/jamshid/codes/social-knowledge-analysis'
 sys.path.insert(0, path)
 
 import measures
+import hypergraphs
 from misc import helpers
 from data import utils, readers
 
@@ -196,6 +197,43 @@ def hypergraph_access(cocrs,
 
     return access_score
 
+
+def random_deepwalk(cocrs,
+                    years_of_cocrs_columns,
+                    path_to_deepwalk,
+                    **kwargs):
+
+    pred_size = kwargs.get('pred_size', 50)
+
+    # get all chemicals
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    # chemicals in the deepwalk
+    deepwalk_chems = hypergraphs.extract_chems_from_deepwalks(path_to_deepwalk)
+    
+    def random_deepwalk_predictor(year_of_pred, sub_chems):
+        
+        if sub_chems is not None:
+            overlap_indic = np.in1d(chems, sub_chems)
+            sub_cocrs = cocrs[overlap_indic, :]
+        else:
+            sub_chems = chems
+            sub_cocrs = cocrs
+
+        """ Restricting Attention to Unstudied Materials """
+        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
+        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
+        sub_chems = sub_chems[unstudied_indic]
+
+        # randomly choosing chemicals from those that exist in the deepwalks
+        deepwalk_sub_chems = deepwalk_chems[np.isin(deepwalk_chems, sub_chems)]
+        
+        np.random.shuffle(deepwalk_sub_chems)
+        return deepwalk_sub_chems[:pred_size]
+
+    return random_deepwalk_predictor
+    
 
 def hypergraph_author_accesss(path_to_VM_core,
                               path_to_VM_kw,
