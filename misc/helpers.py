@@ -48,3 +48,21 @@ def find_first_time_cocrs(cocrs, col):
 
     bin_indic = (np.sum(cocrs[:,:col],axis=1)==0) * (cocrs[:,col]>0)
     return np.where(bin_indic)[0]
+
+
+def prune_deepwalk_sentences(sents, remove='author'):
+
+    # removing authors or chemicals
+    if remove=='author':
+        hl = [[s for s in h.split(' ') if 'a_' not in s] for h in sents]
+    elif remove=='chemical':
+        hl = [[s for s in h.split(' ') if ('a_' in s) or ('thermoelectric' in s)]
+              for h in sents]
+
+    # rejoining the split terms and ignoring those with singular terms
+    hl = [' '.join(h) for h in hl if len(h)>1]
+
+    # removing dots
+    hl = [h.split('.')[0] for h in hl]
+
+    return hl
