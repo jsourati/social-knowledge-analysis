@@ -270,7 +270,7 @@ def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None, rand_seed
 
     v = start_idx
     for i in range(L-1):
-        
+
         # selecting edge
         v_edges = R[:,v].indices
         edge_weights = R[:,v].data
@@ -279,27 +279,27 @@ def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None, rand_seed
         e = v_edges[eind]
 
         # selecting a node inside e
-        row = R[e,:].tocsr()
-        e_nodes = row.indices
+        row = np.squeeze(R[e,:].toarray())
         
         if not(lazy):
-            row[0,v]=0
-            e_nodes = list(e_nodes)
-            e_nodes.remove(v)
-            e_nodes = np.array(e_nodes)
-            # if no other node remains in the paper, exit
-            if len(e_nodes)==0:
-                return seq
-            
+            row[v]=0
+        if ~np.any(row>0):
+            return seq
             
         if node_weight_func is None:
-            node_weights = row.data
+            e_nodes = np.where(row>0)[0]
+            node_weights = row[row>0]
             node_weights = node_weights/node_weights.sum()
         else:
-            arr_row = np.float32(row.toarray())[0,:]
-            node_weights = node_weight_func(arr_row)
+            # here, we get the edge-nodes (e_nodes) after applying
+            # the weighting function, since it might change the values
+            # of the node probabilities
+            node_weights = node_weight_func(row)
+            if ~np.any(node_weights>0):
+                return seq
+            e_nodes = np.where(node_weights>0)[0]
             node_weights = node_weights[node_weights>0]
-
+            
         nind = node_weights.cumsum().searchsorted(randgen())
         v = e_nodes[nind]
 
@@ -324,8 +324,13 @@ def gen_DeepWalk_sentences_fromKW(R,
 
     msdb.crsr.execute('SELECT formula FROM chemical;')
     chems = np.array([x[0] for x in msdb.crsr.fetchall()])
-    
-    f = lambda data: node_weighting_1(data, chem_to_author_ratio)
+
+    if 0 < chem_to_author_ratio < np.inf:
+        f = lambda data: node_weighting_alpha(data, chem_to_author_ratio)
+    elif chem_to_author_ratio==np.inf:
+        f = lambda data: node_weighting_chem(data)
+    elif chem_to_author_ratio==0:
+        f = lambda data: node_weighting_author(data)
 
     increments = None
     if rand_seed is not None:
@@ -349,7 +354,8 @@ def gen_DeepWalk_sentences_fromKW(R,
                 with open(file_path, 'a') as tfile:
                     tfile.write('\n'.join(sents[i-500:i])+'\n')
                     nlines = i
-                logger.info('{} randm walks are saved'.format(i))
+                if logger is not None:
+                    logger.info('{} randm walks are saved'.format(i))
 
     if file_path is not None:
         with open(file_path, 'a') as f:
@@ -357,7 +363,33 @@ def gen_DeepWalk_sentences_fromKW(R,
 
     return sents
 
-def node_weighting_1(data, alpha):
+
+def node_weighting_chem(data):
+    """Weighting nodes such that only chemicals are sampled; if there is
+    no chemical is selected among the nodes, an all-zero vector will be returned 
+    (i.e., random walk will be terminated)
+    """
+
+    nA = 1739453
+    data[:nA] = 0
+    if np.any(data>0):
+        data = data/np.sum(data)
+
+    return data
+    
+def node_weighting_author(data):
+    """Similar to node_weighting_chems but for authors
+    """
+
+    nA = 1739453
+    data[nA:] = 0
+    if np.any(data>0):
+        data = data/np.sum(data)
+        
+    return data
+
+
+def node_weighting_alpha(data, alpha):
     """Giving weights to existing nodes in a hyperedge  such that
     the probabiliy of choosing chemical nodes is alpha times the
     probability of choosing an author node in each random walk step
@@ -378,6 +410,28 @@ def node_weighting_1(data, alpha):
         data[nA:nA+nC] = data[nA:nA+nC]/C
         
     return data
+
+
+def extract_chems_from_deepwalks(path_or_sents):
+    """Extracting chemical terms of a set of deepwalk sentences,
+    assuming that the deepwalks have been generated starting from a 
+    single keyword node
+    """
+
+    if isinstance(path_or_sents, str):
+        with open(path_or_sents, 'r') as f:
+            sents = f.read().splitlines()
+    else:
+        sents = path_or_sents
+
+    sents = helpers.prune_deepwalk_sentences(sents)
+    kw = sents[0].split(' ')[0]
+    chems = ' '.join(sents)
+    chems = chems.replace(kw+' ', '')
+    chems = chems.split(' ')
+
+    return np.unique(chems)
+
 
 def bfs(R, start_idx, stopping_points=[]):
     """Breadth first search algorithm for strating from a 
