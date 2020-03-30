@@ -250,14 +250,18 @@ def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
         return left_mat * dest_subP[interm_inds,:]
 
 
-def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None, rand_seed=None):
+def random_walk_seq(R, start_idx, L,
+                    lazy=True,
+                    node_weight_func=None,
+                    rand_seed=None):
     """Generating a random walk with a specific length and from 
     a starting point 
     """
 
 
     R = R.tocsc()
-    seq = [start_idx]
+    seq = [start_idx]       # set of hyper-nodes
+    eseq = []               # set of hyper-edges
 
     if not(lazy) and (np.sum(R[:,start_idx])==0):
         print("Non-lazy random walk cannot start from an isolated vertex.")
@@ -273,13 +277,14 @@ def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None, rand_seed
 
         # selecting edge
         v_edges = R[:,v].indices
-        edge_weights = R[:,v].data
+        edge_weights = R[:,v].data   # this is an np.array
         
         eind = (edge_weights/edge_weights.sum()).cumsum().searchsorted(randgen())
         e = v_edges[eind]
+        eseq += [e]
 
         # selecting a node inside e
-        row = np.squeeze(R[e,:].toarray())
+        row = np.float32(np.squeeze(R[e,:].toarray()))
         
         if not(lazy):
             row[v]=0
@@ -299,20 +304,21 @@ def random_walk_seq(R, start_idx, L, lazy=True, node_weight_func=None, rand_seed
                 return seq
             e_nodes = np.where(node_weights>0)[0]
             node_weights = node_weights[node_weights>0]
-            
+
         nind = node_weights.cumsum().searchsorted(randgen())
         v = e_nodes[nind]
 
         seq += [v]
 
-    return seq
-
+    return seq, eseq
+    
 
 def gen_DeepWalk_sentences_fromKW(R,
                                   chem_to_author_ratio,
                                   length,
                                   size,
                                   file_path=None,
+                                  eseq_file_path = None,
                                   rand_seed=None,
                                   logger=None):
     """Generating a sequence of random walks starting from the last column
@@ -338,11 +344,15 @@ def gen_DeepWalk_sentences_fromKW(R,
         np.random.shuffle(increments)
 
     sents = []
+    eseqs_list = []
     for i in range(size):
-        seq = random_walk_seq(R, R.shape[1]-1, length,
-                              lazy=False,
-                              node_weight_func=f,
-                              rand_seed=None if rand_seed is None else rand_seed+increments[i])
+        seq, eseq = random_walk_seq(R, R.shape[1]-1, length,
+                                    lazy=False,
+                                    node_weight_func=f,
+                                    rand_seed=None if rand_seed is None else rand_seed+increments[i])
+        eseqs_list += [' '.join([str(x) for x in eseq])]
+
+        # parsing the hyper nodes
         toks = ['a_{}'.format(s) if s<nA else
                 (chems[s-nA] if nA<=s<nA+nC else 'thermoelectric') for s in seq]
         sent = ' '.join(toks) + '.'
@@ -354,14 +364,22 @@ def gen_DeepWalk_sentences_fromKW(R,
                 with open(file_path, 'a') as tfile:
                     tfile.write('\n'.join(sents[i-500:i])+'\n')
                     nlines = i
-                if logger is not None:
-                    logger.info('{} randm walks are saved'.format(i))
+            if eseq_file_path:
+                with open(eseq_file_path, 'a') as tfile:
+                    tfile.write('\n'.join(eseqs_list[i-500:i])+'\n')
+                    nlines = i
+            if logger is not None:
+                logger.info('{} randm walks are saved'.format(i))
 
     if file_path is not None:
         with open(file_path, 'a') as f:
             f.write('\n'.join(sents[nlines:]))
+    if eseq_file_path is not None:
+        with open(eseq_file_path, 'a') as f:
+            f.write('\n'.join(eseqs_list[nlines:]))
 
-    return sents
+            
+    return sents, eseqs_list
 
 
 def node_weighting_chem(data):
@@ -394,7 +412,7 @@ def node_weighting_alpha(data, alpha):
     the probabiliy of choosing chemical nodes is alpha times the
     probability of choosing an author node in each random walk step
     """
-
+    
     nA = 1739453
     nC = 107466
     
@@ -416,6 +434,11 @@ def extract_chems_from_deepwalks(path_or_sents):
     """Extracting chemical terms of a set of deepwalk sentences,
     assuming that the deepwalks have been generated starting from a 
     single keyword node
+
+    *Returns:*
+
+    * unique values in the deepwalk sentences (excluding the keyword term)
+    * counts of the unique values
     """
 
     if isinstance(path_or_sents, str):
@@ -430,7 +453,7 @@ def extract_chems_from_deepwalks(path_or_sents):
     chems = chems.replace(kw+' ', '')
     chems = chems.split(' ')
 
-    return np.unique(chems)
+    return np.unique(chems, return_counts=True)
 
 
 def bfs(R, start_idx, stopping_points=[]):
