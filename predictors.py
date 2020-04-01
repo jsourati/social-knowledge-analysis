@@ -63,6 +63,7 @@ def ySD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
 def embedding(cocrs, years_of_cocrs_columns, model_or_path, y_term, **kwargs):
 
     pred_size = kwargs.get('pred_size', 50)
+    return_scores = kwargs.get('return_scores', False)
     
     # get all chemicals
     msdb.crsr.execute('SELECT formula FROM chemical;')
@@ -91,7 +92,10 @@ def embedding(cocrs, years_of_cocrs_columns, model_or_path, y_term, **kwargs):
 
         sorted_inds = np.argsort(-scores)[:pred_size]
 
-        return sub_chems[sorted_inds]
+        if return_scores:
+            return sub_chems[sorted_inds], scores[sorted_inds]
+        else:
+            return sub_chems[sorted_inds]
 
     return embedding_predictor
 
@@ -204,13 +208,15 @@ def random_deepwalk(cocrs,
                     **kwargs):
 
     pred_size = kwargs.get('pred_size', 50)
+    return_scores = kwargs.get('return_scores', False)
+
 
     # get all chemicals
     msdb.crsr.execute('SELECT formula FROM chemical;')
     chems = np.array([x[0] for x in msdb.crsr.fetchall()])
 
     # chemicals in the deepwalk
-    deepwalk_chems = hypergraphs.extract_chems_from_deepwalks(path_to_deepwalk)
+    deepwalk_chems,_ = hypergraphs.extract_chems_from_deepwalks(path_to_deepwalk)
     
     def random_deepwalk_predictor(year_of_pred, sub_chems):
         
@@ -228,11 +234,60 @@ def random_deepwalk(cocrs,
 
         # randomly choosing chemicals from those that exist in the deepwalks
         deepwalk_sub_chems = deepwalk_chems[np.isin(deepwalk_chems, sub_chems)]
-        
-        np.random.shuffle(deepwalk_sub_chems)
-        return deepwalk_sub_chems[:pred_size]
+        # random selection by actually generating random numbers
+        # (to be used in AUC metric evaluation)
+        scores = np.random.random(len(deepwalk_sub_chems))
+        sorted_inds = np.argsort(-scores)[:pred_size]
+
+        if return_scores:
+            return deepwalk_sub_chems[sorted_inds], scores[sorted_inds]
+        else:
+            return deepwalk_sub_chems[:pred_size]
 
     return random_deepwalk_predictor
+
+
+def countsort_deepwalk(cocrs,
+                       years_of_cocrs_columns,
+                       path_to_deepwalk,
+                       **kwargs):
+
+    pred_size = kwargs.get('pred_size', 50)
+
+    # get all chemicals
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    # chemicals in the deepwalk
+    deepwalk_chems, counts = hypergraphs.extract_chems_from_deepwalks(path_to_deepwalk)
+    
+    def countsort_deepwalk_predictor(year_of_pred, sub_chems):
+        
+        if sub_chems is not None:
+            overlap_indic = np.in1d(chems, sub_chems)
+            sub_cocrs = cocrs[overlap_indic, :]
+        else:
+            sub_chems = chems
+            sub_cocrs = cocrs
+
+        """ Restricting Attention to Unstudied Materials """
+        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
+        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
+        sub_chems = sub_chems[unstudied_indic]
+
+        # sort chemicals based on their counts in the deepwalk sentences
+        deepwalk_sub_chems = deepwalk_chems[np.isin(deepwalk_chems, sub_chems)]
+        deepwalk_sub_counts = counts[np.isin(deepwalk_chems, sub_chems)]
+        
+        sorted_inds = np.argsort(-deepwalk_sub_counts)[:pred_size]
+
+        if return_scores:
+            return deepwalk_sub_chems[sorted_inds], deepwalk_sub_counts[sorted_inds]
+        else:
+            return deepwalk_sub_chems[sorted_inds]
+
+    return countsort_deepwalk_predictor
+
     
 
 def hypergraph_author_accesss(path_to_VM_core,
@@ -265,5 +320,31 @@ def hypergraph_author_accesss(path_to_VM_core,
         return sorted_inds
 
     return author_access_scores
+
+
+def author_embedding(model_or_path, y_term, **kwargs):
+    """Author (discoverer) prediction from a model that is trained based
+    on deepwalks over keyword term and author ndoes
+
+    The model is assumed to have a vocabulary consisting of only the keyword
+    term and author identifiers in the form of "a_AUID"
+    """
+
+    pred_size = kwargs.get('pred_size', 50)
+    
+    if isinstance(model_or_path, str):
+        model = Word2Vec.load(model_or_path)
+    else:
+        model = model_or_path
+
+    authors = np.array(list(model.wv.vocab.keys()))
+    
+    def author_embedding_predictor(year_of_pred):
+        scores = measures.cosine_sims(model, authors, y_term)
+        sorted_inds = np.argsort(-scores)[:pred_size]
+
+        return np.array([int(x[2:]) for x in authors[sorted_inds]])
+
+    return author_embedding_predictor
 
 
