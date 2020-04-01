@@ -2,6 +2,7 @@ import os
 import sys
 import pdb
 import json
+import random
 import logging
 import pymysql
 import numpy as np
@@ -289,7 +290,7 @@ def random_walk_seq(R, start_idx, L,
         if not(lazy):
             row[v]=0
         if ~np.any(row>0):
-            return seq
+            return seq, eseq
             
         if node_weight_func is None:
             e_nodes = np.where(row>0)[0]
@@ -301,7 +302,7 @@ def random_walk_seq(R, start_idx, L,
             # of the node probabilities
             node_weights = node_weight_func(row)
             if ~np.any(node_weights>0):
-                return seq
+                return seq, eseq
             e_nodes = np.where(node_weights>0)[0]
             node_weights = node_weights[node_weights>0]
 
@@ -317,6 +318,7 @@ def gen_DeepWalk_sentences_fromKW(R,
                                   chem_to_author_ratio,
                                   length,
                                   size,
+                                  keyword,
                                   file_path=None,
                                   eseq_file_path = None,
                                   rand_seed=None,
@@ -331,12 +333,16 @@ def gen_DeepWalk_sentences_fromKW(R,
     msdb.crsr.execute('SELECT formula FROM chemical;')
     chems = np.array([x[0] for x in msdb.crsr.fetchall()])
 
-    if 0 < chem_to_author_ratio < np.inf:
+    if chem_to_author_ratio is None:
+        f = None
+    elif 0 < chem_to_author_ratio < np.inf:
         f = lambda data: node_weighting_alpha(data, chem_to_author_ratio)
     elif chem_to_author_ratio==np.inf:
         f = lambda data: node_weighting_chem(data)
     elif chem_to_author_ratio==0:
         f = lambda data: node_weighting_author(data)
+    else:
+        f = None
 
     increments = None
     if rand_seed is not None:
@@ -345,6 +351,7 @@ def gen_DeepWalk_sentences_fromKW(R,
 
     sents = []
     eseqs_list = []
+    nlines=0
     for i in range(size):
         seq, eseq = random_walk_seq(R, R.shape[1]-1, length,
                                     lazy=False,
@@ -354,7 +361,7 @@ def gen_DeepWalk_sentences_fromKW(R,
 
         # parsing the hyper nodes
         toks = ['a_{}'.format(s) if s<nA else
-                (chems[s-nA] if nA<=s<nA+nC else 'thermoelectric') for s in seq]
+                (chems[s-nA] if nA<=s<nA+nC else keyword) for s in seq]
         sent = ' '.join(toks) + '.'
 
         sents += [sent]
@@ -373,10 +380,10 @@ def gen_DeepWalk_sentences_fromKW(R,
 
     if file_path is not None:
         with open(file_path, 'a') as f:
-            f.write('\n'.join(sents[nlines:]))
+            f.write('\n'.join(sents[nlines:])+'\n')
     if eseq_file_path is not None:
         with open(eseq_file_path, 'a') as f:
-            f.write('\n'.join(eseqs_list[nlines:]))
+            f.write('\n'.join(eseqs_list[nlines:])+'\n')
 
             
     return sents, eseqs_list
@@ -455,6 +462,29 @@ def extract_chems_from_deepwalks(path_or_sents):
 
     return np.unique(chems, return_counts=True)
 
+
+def random_chem_select(E, P2C_dict):
+    """Randomly selecting chemicals from a set of given papers
+    (hyperedges)
+
+    *Parameters:*
+
+    * E: a list of strings, each of which contains a set of paper IDs
+    * P2C_dict: dictionary mapping each paper ID to the set of chemicals 
+      that it contains
+    """
+
+    pids = [[int(x) for x in e.split(' ')] for e in E]
+    pids_chems = [[[] if x not in P2C_dict else P2C_dict[x] for x in pid]
+                  for pid in pids]
+    choices = [['' if len(x)==0 else random.choice(x) for x in pchems]
+               for pchems in pids_chems]
+    # removing empty sets
+    choices = [list(filter(lambda x:x!='', choice)) for choice in choices]
+    # making strings
+    choices = [' '.join(choice) for choice in choices]
+
+    return choices
 
 def bfs(R, start_idx, stopping_points=[]):
     """Breadth first search algorithm for strating from a 
