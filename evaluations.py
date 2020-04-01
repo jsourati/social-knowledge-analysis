@@ -3,8 +3,10 @@ import sys
 import pdb
 import logging
 import numpy as np
+from scipy import sparse
 
 from gensim.models import Word2Vec
+from sklearn.metrics import roc_auc_score
 
 path = '/home/jamshid/codes/social-knowledge-analysis'
 sys.path.insert(0, path)
@@ -208,8 +210,10 @@ def eval_predictor(chems,
     The evaluations are done for individual years strating from a given year 
     of prediction to 2018.
     """
-    
+
+    metric = kwargs.get('metric', 'chr')
     path_to_wvmodel = kwargs.get('path_to_wvmodel', None)
+    wvmodel = kwargs.get('wvmodel', None)
     count_threshold = kwargs.get('count_threshold', 0)
     logfile_path = kwargs.get('logfile_path', None)
     logger_disable = kwargs.get('logger_disable',False)
@@ -218,10 +222,17 @@ def eval_predictor(chems,
     """ Restricting to Model Vocabulary (if necessasry) """
     # if a model is given, consider the subset of chemicals that exist in the
     # model vocabulary (--> sub_chems)
-    if path_to_wvmodel is not None:
-        
-        model = Word2Vec.load(path_to_wvmodel)
 
+    if path_to_wvmodel is not None:
+        model = Word2Vec.load(path_to_wvmodel)
+    elif wvmodel is not None:
+        model = wvmodel
+    else:
+        model=None
+
+        
+    if model is not None:
+        
         # extract chemicals from the vocabulary of the model
         logger.info('Extracting chemicals from the vocabulary of the model with count threshold {}.'.format(count_threshold))
         model_chems = []
@@ -245,18 +256,30 @@ def eval_predictor(chems,
 
 
     """ Generating the Prediction """
-    preds = predictor_func(year_of_pred, sub_chems)
-
+    preds = predictor_func(year_of_pred,sub_chems)    
+    if metric=='auc':
+        if len(preds)!=2:
+            raise ValueError('When asking for AUC metric, predictor should return score array too.')
+        scores = preds[1]
+        preds = preds[0]
+    
 
     """ Evaluating the Predictions for the Upcoming Years """
     years_of_eval = np.arange(year_of_pred, 2019)
-    accs = np.zeros(len(years_of_eval))
+    mvals = np.zeros(len(years_of_eval))
     for i, yr in enumerate(years_of_eval):
         gt = gt_func(yr, sub_chems)
-        accs[i] = np.sum(np.in1d(gt, preds)) / len(preds)
-        
 
-    return np.cumsum(accs)
+        if metric=='chr':      # Cumulative Hit Rate
+            mvals[i] = mvals[i-1] + np.sum(np.in1d(gt, preds)) / len(preds)
+        elif metric=='auc':    # Area Under Curve
+            y = np.zeros(len(preds))
+            y[np.isin(preds, gt)] = 1
+            if len(y)==0:
+                pdb.set_trace()
+            mvals[i] = roc_auc_score(y, scores)
+
+    return mvals
 
 
 def eval_author_predictor(discoverers_predictor_func,
@@ -308,25 +331,23 @@ def gt_discoveries(cocrs, years_of_cocrs_columns):
 def gt_discoverers(**kwargs):
 
     R = kwargs.get('R', None)
-    path_VM_core = kwargs.get('path_VM_core', None)
-    path_VM_kw = kwargs.get('path_VM_kw', None)
+    path_to_VM = kwargs.get('path_to_VM', None)
+    path_to_VMkw = kwargs.get('path_to_VMkw', None)
 
     """ Building General Vertex Weight Matrix (R) """
     assert (R is not None) or \
-        ((path_VM_core is not None) and (path_VM_kw is not None)), \
+        ((path_to_VM is not None) and (path_to_VMkw is not None)), \
         'Either the pre-computed vertex weight matrix (R), or the paths \
          to the submatrices need to be given.'
 
     if R is None:
-        VM = sparse.load_npz(path_VM_core)
-        kwVM = sparse.load_npz(path_VM_kw)
-        R = sparse.hstack((VM, kwVM), 'csc')
+        VM = sparse.load_npz(path_to_VM)
+        VMkw = sparse.load_npz(path_to_VMkw)
+        R = sparse.hstack((VM, VMkw), 'csc')
 
     def gt_discoverers_func(year_of_pred):
         if 'R' in kwargs: del kwargs['R']
-        auids = hypergraphs.year_discoverers(R,
-                                             year_of_pred,
-                                             )
+        auids = hypergraphs.year_discoverers(R,year_of_pred)
         return auids
 
     return gt_discoverers_func
