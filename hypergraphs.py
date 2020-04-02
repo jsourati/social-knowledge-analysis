@@ -76,6 +76,36 @@ def compute_vertex_matrix(**kwargs):
 
     return VM
 
+def compute_vertex_aff_submatrix(Aff2Pid=None, **kwargs):
+    """Computing vertex weight matrix for hypernodes corresponding to author
+    affiliations (with all papers--hyperedges included)
+
+    If Aff2Pid dictionary is not given, it should be formed first. When doing that,
+    note that the variable group_concat_max_len is increased from its default value (1024)
+    by executing 'SET SESSION group_concat_max_len=1000000;'
+    """
+
+    if Aff2Pid is None:
+        scomm = 'SELECT A2A.aff_id, GROUP_CONCAT(DISTINCT(P.paper_id)) FROM paper P' \
+                'INNER JOIN paper_author_mapping P2A ON P2A.paper_id=P.paper_id' \
+                'INNER JOIN author_affiliation_mapping A2A ON A2A.author_id=P2A.author_id' \
+                'GROUP BY A2A.aff_id ORDER BY A2A.aff_id;'
+        msdb.crsr.execute(scomm)
+        Aff,Pids = zip(*msdb.crsr.fetchall())
+        Aff2Pid = {Aff[i]: np.array([int(x) for x in Pids[i].split(',')])
+                   for i in range(len(Aff))}
+    
+    nP = 1507143
+    nAff = len(Aff2Pid)
+    
+    VM = sparse.lil_matrix((nP,nAff), dtype=np.uint8)
+    
+    cols = np.concatenate([np.ones(len(Aff2Pid[i]))*i for i in range(nAff)])
+    rows = np.concatenate([Aff2Pid[i] for i in range(nAff)])
+    VM[rows, cols] = 1
+    
+    return VM
+
 def compute_vertex_KW_submatrix(los, **kwargs):
     """Forming a submatrix corresponding to conceptual nodes
     given as a set of keywords priveded in `los` (list of strings) arguments
@@ -319,20 +349,52 @@ def gen_DeepWalk_sentences_fromKW(R,
                                   length,
                                   size,
                                   keyword,
+                                  block_types=[],
                                   file_path=None,
                                   eseq_file_path = None,
                                   rand_seed=None,
                                   logger=None):
     """Generating a sequence of random walks starting from the last column
     of the vertex weight matrix
-    """
 
-    nA = 1739453
-    nC = 107466
+    Input argument block_types specifies type of the "column blocks" in the vertex
+    matrix, with format ((B1,n1), (B2,n2),...), where Bi and ni are the i-th block and
+    its size. It is assumed that these blocks are grouped in the same order as in
+    this variable(they are not shuffled). 
+    """
 
     msdb.crsr.execute('SELECT formula FROM chemical;')
     chems = np.array([x[0] for x in msdb.crsr.fetchall()])
 
+    if len(block_types)==0:
+        nA = 1739453
+        nC = 107466
+        type_ranges = {'author': [0,nA], 'chemical': [nA,nA+nC]}
+    else:
+        assert np.sum([v[1] for v in block_types])==R.shape[1]-1, \
+            'Sum of sizes in block_types should be equal to the number of columns in R.'
+        cnt = 0
+        type_ranges = {}
+        for k,v in block_types:
+            type_ranges[k] = [cnt, cnt+v]
+            cnt += v
+
+    # function for translating a selected node in random walk to a
+    # meaningful string 
+    def translate_entry(idx):
+        for k,v in type_ranges.items():
+            if v[0] <= idx < v[1]:
+                if k=='author':
+                    return 'a_{}'.format(idx-v[0])
+                elif k=='affiliation':
+                    return 'aff_{}'.format(idx-v[0])
+                elif k=='chemical':
+                    return chems[idx-v[0]]
+                
+        # if the entry does not belong to any of the ranges --> KW
+        return keyword    
+
+    
     if chem_to_author_ratio is None:
         f = None
     elif 0 < chem_to_author_ratio < np.inf:
@@ -360,9 +422,8 @@ def gen_DeepWalk_sentences_fromKW(R,
         eseqs_list += [' '.join([str(x) for x in eseq])]
 
         # parsing the hyper nodes
-        toks = ['a_{}'.format(s) if s<nA else
-                (chems[s-nA] if nA<=s<nA+nC else keyword) for s in seq]
-        sent = ' '.join(toks) + '.'
+        toks = [translate_entry(s) for s in seq]
+        sent = ' '.join(toks)
 
         sents += [sent]
 
