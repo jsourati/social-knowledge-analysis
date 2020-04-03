@@ -336,7 +336,9 @@ def random_walk_seq(R, start_idx, L,
             e_nodes = np.where(node_weights>0)[0]
             node_weights = node_weights[node_weights>0]
 
-        nind = node_weights.cumsum().searchsorted(randgen())
+        CSW = node_weights.cumsum()
+        if CSW[-1]<1.: CSW[-1]=1.
+        nind = CSW.searchsorted(randgen())
         v = e_nodes[nind]
 
         seq += [v]
@@ -345,7 +347,7 @@ def random_walk_seq(R, start_idx, L,
     
 
 def gen_DeepWalk_sentences_fromKW(R,
-                                  chem_to_author_ratio,
+                                  ratio,
                                   length,
                                   size,
                                   keyword,
@@ -360,7 +362,12 @@ def gen_DeepWalk_sentences_fromKW(R,
     Input argument block_types specifies type of the "column blocks" in the vertex
     matrix, with format ((B1,n1), (B2,n2),...), where Bi and ni are the i-th block and
     its size. It is assumed that these blocks are grouped in the same order as in
-    this variable(they are not shuffled). 
+    this variable(they are not shuffled).
+
+    Input `ratio` is either a scalar that determines the ratio between the probability of 
+    choosing a chemical node to the probability of author selection (if two types
+    of nodes are present), or an array-line that determines mixture coefficients
+    corresponding to various groups of nodes (if multiples types of nodes are present)
     """
 
     msdb.crsr.execute('SELECT formula FROM chemical;')
@@ -395,16 +402,18 @@ def gen_DeepWalk_sentences_fromKW(R,
         return keyword    
 
     
-    if chem_to_author_ratio is None:
+    if ratio is None:
         f = None
-    elif 0 < chem_to_author_ratio < np.inf:
-        f = lambda data: node_weighting_alpha(data, chem_to_author_ratio)
-    elif chem_to_author_ratio==np.inf:
-        f = lambda data: node_weighting_chem(data)
-    elif chem_to_author_ratio==0:
-        f = lambda data: node_weighting_author(data)
+    elif np.isscalar(ratio):
+        if 0 < ratio < np.inf:
+            f = lambda data: node_weighting_alpha(data, ratio)
+        elif ratio==np.inf:
+            f = lambda data: node_weighting_chem(data)
+        elif ratio==0:
+            f = lambda data: node_weighting_author(data)
     else:
-        f = None
+        assert len(block_types)>0, 'Having array-like ratio is only for multiple types of nodes'
+        f = lambda data: node_weighting_waff(data, ratio)
 
     increments = None
     if rand_seed is not None:
@@ -462,6 +471,45 @@ def node_weighting_chem(data):
         data = data/np.sum(data)
 
     return data
+
+def node_weighting_waff(data, pies):
+    """Weighting nodes in different groups 
+
+    Group indices are hard-coded in this function, make them
+    variable if needed (also the keyword noded is counted as a 
+    chemical here)
+
+    Here, we also assume that `data` is a 1D binary vector (values
+    are either zero or one)
+    """
+    
+    if ~np.any(data>0):
+        return data
+    
+    assert np.sum(pies)==1., 'Mixture coefficients (pies) should sum to one'
+
+    pies = np.array(pies)
+    
+    nA = 1739453
+    nC = 107466
+    nAff = 121267
+    
+    # renormalization
+    GNNZ = np.array([np.sum(data[:nA]>0) + (data[-1]>0),
+                     np.sum(data[nA:nA+nC]),
+                     np.sum(data[nA+nC:-1]>0)])
+    pies = pies / np.sum(pies[GNNZ>0])
+
+    if GNNZ[0]>0:
+        data[:nA] = data[:nA] * pies[0]/(np.sum(data[:nA]>0)+(data[-1]>0))
+        data[-1] = data[-1] * pies[0]/(np.sum(data[:nA]>0)+(data[-1]>0))
+    if GNNZ[1]>0:
+        data[nA:nA+nC] = data[nA:nA+nC] * pies[1]/np.sum(data[nA:nA+nC]>0)
+    if GNNZ[2]>0:
+        data[nA+nC:-1] = data[nA+nC:-1] * pies[2]/np.sum(data[nA+nC:-1]>0)
+        
+    return data
+    
     
 def node_weighting_author(data):
     """Similar to node_weighting_chems but for authors
