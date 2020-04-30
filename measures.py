@@ -356,10 +356,11 @@ def accessibility_scalar_metric(R,
 
     years = np.arange(year-memory,year)
     yrs_scores = np.zeros((memory,len(sub_chems)))
-    for i, yr in enumerate(years):
-        scores = accessibility_scores([yr], R=R, sub_chems=sub_chems, nstep=nstep)
-        yrs_scores[i,:] = scores
-
+    #for i, yr in enumerate(years):
+    #    scores = accessibility_scores([yr], R=R, sub_chems=sub_chems, nstep=nstep)
+    #    yrs_scores[i,:] = scores
+    scores = accessibility_scores(years, R=R, sub_chems=sub_chems, nstep=nstep)
+    
     if mtype=='SUM':
         scores = np.sum(yrs_scores, axis=0)
     elif mtype=='MEAN':

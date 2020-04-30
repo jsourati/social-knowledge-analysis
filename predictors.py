@@ -26,6 +26,8 @@ def ySD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
     memory = kwargs.get('memory', 5)
     scalarization = kwargs.get('scalarization', 'SUM')
     pred_size = kwargs.get('pred_size', 50)
+    return_scores = kwargs.get('return_scores', False)
+
 
     # get all chemicals
     msdb.crsr.execute('SELECT formula FROM chemical;')
@@ -55,7 +57,11 @@ def ySD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
 
         sorted_inds = np.argsort(-scores)[:pred_size]
 
-        return sub_chems[sorted_inds]
+        if return_scores:
+            return sub_chems[sorted_inds], scores[sorted_inds]
+        else:
+            return sub_chems[sorted_inds]
+
 
     return ySD_predictor
 
@@ -168,7 +174,8 @@ def hypergraph_access(cocrs,
     pred_size = kwargs.get('pred_size', 50)
     nstep = kwargs.get('nstep', 1)
     memory = kwargs.get('memory', 5)
-    scalarization = kwargs.get('scalarization', 'SUM')
+    #scalarization = kwargs.get('scalarization', 'SUM')
+    return_scores = kwargs.get('return_scores', False)
 
     # get all chemicals
     msdb.crsr.execute('SELECT formula FROM chemical;')
@@ -188,16 +195,18 @@ def hypergraph_access(cocrs,
         unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
         sub_chems = sub_chems[unstudied_indic]
 
-        scores = measures.accessibility_scalar_metric(R,
-                                                      year_of_pred,
-                                                      memory,
-                                                      sub_chems=sub_chems,
-                                                      nstep=nstep,
-                                                      mtype=scalarization)
+        years = np.arange(year_of_pred-memory, year_of_pred)
+        scores = measures.accessibility_scores(years,
+                                               R=R,
+                                               sub_chems=sub_chems,
+                                               nstep=nstep)
 
         sorted_inds = np.argsort(-scores)[:pred_size]
 
-        return sub_chems[sorted_inds]
+        if return_scores:
+            return sub_chems[sorted_inds], scores[sorted_inds]
+        else:
+            return sub_chems[sorted_inds]
 
     return access_score
 
@@ -253,6 +262,7 @@ def countsort_deepwalk(cocrs,
                        **kwargs):
 
     pred_size = kwargs.get('pred_size', 50)
+    return_scores = kwargs.get('return_scores', False)
 
     # get all chemicals
     msdb.crsr.execute('SELECT formula FROM chemical;')

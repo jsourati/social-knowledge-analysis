@@ -215,9 +215,11 @@ def eval_predictor(chems,
     path_to_wvmodel = kwargs.get('path_to_wvmodel', None)
     wvmodel = kwargs.get('wvmodel', None)
     count_threshold = kwargs.get('count_threshold', 0)
+    save_path = kwargs.get('save_path', None)
     logfile_path = kwargs.get('logfile_path', None)
     logger_disable = kwargs.get('logger_disable',False)
     logger = helpers.set_up_logger(__name__, logfile_path, logger_disable)
+    
 
     """ Restricting to Model Vocabulary (if necessasry) """
     # if a model is given, consider the subset of chemicals that exist in the
@@ -256,12 +258,16 @@ def eval_predictor(chems,
 
 
     """ Generating the Prediction """
-    preds = predictor_func(year_of_pred,sub_chems)    
+    preds = predictor_func(year_of_pred,sub_chems)
     if metric=='auc':
         if len(preds)!=2:
             raise ValueError('When asking for AUC metric, predictor should return score array too.')
         scores = preds[1]
         preds = preds[0]
+
+    if save_path is not None:
+        with open(save_path, 'w') as f:
+            f.write('\n'.join(preds)+'\n')
     
 
     """ Evaluating the Predictions for the Upcoming Years """
@@ -275,8 +281,6 @@ def eval_predictor(chems,
         elif metric=='auc':    # Area Under Curve
             y = np.zeros(len(preds))
             y[np.isin(preds, gt)] = 1
-            if len(y)==0:
-                pdb.set_trace()
             mvals[i] = roc_auc_score(y, scores)
 
     return mvals
