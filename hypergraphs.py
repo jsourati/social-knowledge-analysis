@@ -586,8 +586,26 @@ def random_chem_select(E, P2C_dict):
     pids = [[int(x) for x in e.split(' ')] for e in E]
     pids_chems = [[[] if x not in P2C_dict else P2C_dict[x] for x in pid]
                   for pid in pids]
-    choices = [['' if len(x)==0 else random.choice(x) for x in pchems]
-               for pchems in pids_chems]
+    #choices = [['' if len(x)==0 else random.choice(x) for x in pchems]
+    #           for pchems in pids_chems]
+
+    choices = []
+    for j,pchems in enumerate(pids_chems):
+        seq_choices = []
+        for i,x in enumerate(pchems):
+            if i==0:
+                rem_chems = x
+            elif pids[j][i-1]==pids[j][i]:
+                rem_chems = list(filter(lambda xx: xx != seq_choices[i-1], rem_chems))
+            elif pids[j][i-1]!=pids[j][i]:
+                rem_chems = x
+                
+            if len(rem_chems)==0:
+                seq_choices += ['']
+            else:
+                seq_choices += [random.choice(rem_chems)]
+        choices += [seq_choices]
+    
     # removing empty sets
     choices = [list(filter(lambda x:x!='', choice)) for choice in choices]
     # making strings
