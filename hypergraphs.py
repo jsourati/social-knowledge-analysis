@@ -17,10 +17,8 @@ sys.path.insert(0, path)
 
 from data import readers
 from misc import helpers
-config_path = '/home/jamshid/codes/data/sql_config_0.json'
-msdb = readers.MatScienceDB(config_path, 'msdb')
 
-def compute_vertex_matrix(**kwargs):
+def compute_vertex_matrix(db, **kwargs):
     """Forming vertex matrix of the hypergraph, which is a |E|x|V|
     matrix and its (i,j) element is equal to 1 if hyperedge (article)
     i has node j and zero otherwise
@@ -36,32 +34,28 @@ def compute_vertex_matrix(**kwargs):
 
     savefile_path = kwargs.get('savefile_path',None)
 
-    msdb.crsr.execute('SELECT COUNT(*) FROM author;')
-    nA = msdb.crsr.fetchone()[0]
-    msdb.crsr.execute('SELECT COUNT(*) FROM chemical;')
-    nC = msdb.crsr.fetchone()[0]
+    nP = db.count_table_rows('paper')
+    nA = db.count_table_rows('author')
+    nE = db.count_table_rows(db.entity_tab)
+    logger.info('#papers={}, #author={}, #entities={}'.format(nP,nA,nE))
     
-    logger.info('There are {} author nodes and {} chemical nodes in the database.'.format(nA,nC))
-
-    nP = 1507143
-    
-    VM = sparse.lil_matrix((nP,nA+nC), dtype=np.uint8)
+    VM = sparse.lil_matrix((nP,nA+nE), dtype=np.uint8)
     # filling the matrix with batches
     cnt = 0
     batch_size = 500
-    logger.info('Starting to fill the vertex matrix with batches of size {}'.format(batch_size))
+    logger.info('Starting to fill the vertex matrix with batche size {}'.format(batch_size))
     while cnt<nP:
         pids = np.arange(cnt, cnt + batch_size)
-        auids = msdb.get_authors_by_paper_ids(pids, cols=['author_id'])
-        chemids = msdb.get_chemicals_by_paper_ids(pids, cols=['chem_id'])
+        auids = db.get_LoA_by_PID(pids)
+        eids = db.get_LoE_by_PID(pids)
 
         cols = []
         rows = []
         for i,pid in enumerate(pids):
-            au_cols   = auids[pid]['author_id'] if pid in auids else []
-            chem_cols = chemids[pid]['chem_id'] + nA if pid in chemids else []
-            cols += [np.concatenate((au_cols, chem_cols))]
-            rows += [pid*np.ones(len(au_cols)+len(chem_cols))]
+            au_cols  = auids[pid]['id'] if pid in auids else []
+            ent_cols = eids[pid]['id'] + nA if pid in eids else []
+            cols += [np.concatenate((au_cols, ent_cols))]
+            rows += [pid*np.ones(len(au_cols)+len(ent_cols))]
 
         cols = np.concatenate(cols)
         rows = np.concatenate(rows)
@@ -69,7 +63,7 @@ def compute_vertex_matrix(**kwargs):
 
         cnt += batch_size
 
-        if not(cnt%500):
+        if not(cnt%100000):
             logger.info('{} articles have been processed'.format(cnt))
             if not(cnt%10000) and (savefile_path is not None):
                 sparse.save_npz(savefile_path, VM.tocsc())
@@ -106,25 +100,24 @@ def compute_vertex_aff_submatrix(Aff2Pid=None, **kwargs):
     
     return VM
 
-def compute_vertex_KW_submatrix(los, **kwargs):
+def compute_vertex_KW_submatrix(db, los, **kwargs):
     """Forming a submatrix corresponding to conceptual nodes
     given as a set of keywords priveded in `los` (list of strings) arguments
     """
 
     case_sensitives = kwargs.get('case_sensitives', [])
     
-    nP = 1507143
+    nP = db.count_table_rows('paper')
     ncols = len(los)
     VM = sparse.lil_matrix((nP,ncols), dtype=np.uint8)
-
     for i, kw in enumerate(los):
         if kw in case_sensitives:
             cs = [kw]
         else:
             cs = []
 
-        R = msdb.get_papers_by_keywords([kw], case_sensitives=cs)
-        rows = R['paper_id']
+        R = db.get_papers_by_keywords([kw], case_sensitives=cs)
+        rows = R['id']
         cols = i*np.ones(len(rows))
 
         VM[rows, cols] = 1

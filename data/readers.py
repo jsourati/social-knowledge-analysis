@@ -12,32 +12,63 @@ sys.path.insert(0, path)
 from data import utils
 from misc.helpers import set_up_logger, find_first_time_cocrs
 
-class MatScienceDB(object):
+class DB(object):
+    """Class of databases that we will be wokring for running/evaluating
+    our predictions
 
-    def __init__(self, config_path, DB_name):
+    Compatibility Requirements:
+    ---------------------------
+    The database should have at least five tables:
+    - paper: with at least four columns (id, date, title, abstract)
+    - author: with at least one column (id)
+    - entity: with at least two columns (id, name)--column "name" could
+    be titled differently, but if that is the case it should be specified
+    when constructing class object via input argument "entity_col"
+    - paper_author_mapping: with columns (paper_id, author_id)
+    - entity_paper_mapping: with columns (entity_id, paper_id)
+
+    Table "entity" can have a different name. If that is the case, the table
+    "entity_paper_mapping" should be renamed to the same title, and also the 
+    input argument "entity_tab" should be set accordingly. For exampe, if
+    the entity table is named as "chemical", then the mapping table should 
+    be named as chemical_paper_mapping with columns (chemical_id, paper_id).
+
+    NOTE: we intentionally did not use MySQL's `GROUP_CONCAT` when returning
+    list of papers, authors or entities so that we won't be restricted by
+    the variable `group_concat_max_len`.
+    
+    """
+
+    def __init__(self, config_path, db_name, **kwargs):
+
+        # name of entity table
+        self.entity_tab = kwargs.get('entity_tab', 'entity')
+        # column of names (symbols, etc) in entity table
+        self.entity_col = kwargs.get('entity_col', 'name')
         
         with open(config_path,'r') as f:
             self.configs = json.load(f)
         self.client_config = self.configs['client_config']
         self.db = pymysql.connect(**self.client_config)
         self.crsr = self.db.cursor()
-        self.db_name = DB_name
-        self.crsr.execute('USE {};'.format(self.db_name))
+        self.crsr.execute('USE {};'.format(db_name))
 
+        
     def re_establish_connection(self):
         self.db.close()
         self.db = pymysql.connect(**self.client_config)
         self.crsr = self.db.cursor()
         self.crsr.execute('USE {};'.format(self.db_name))
-        
+
+
     def count_table_rows(self, table_name):
         self.crsr.execute('SELECT COUNT(*) FROM {};'.format(table_name))
         return self.crsr.fetchall()[0][0]
 
     
-    def get_authors_by_paper_ids(self, paper_ids, **kwargs):
+    def get_LoA_by_PID(self, paper_ids, **kwargs):
 
-        cols = kwargs.get('cols', ['author_id'])
+        cols = kwargs.get('cols', ['id'])
         cols = ['A.{}'.format(col) for col in cols] + ['P2A.paper_id']
         pcols = ','.join(cols)
         
@@ -47,10 +78,8 @@ class MatScienceDB(object):
         ID_list_str = '({})'.format(', '.join([str(a) for a in paper_ids]))
         constraints_str = 'P2A.paper_id IN {}'.format(ID_list_str)
 
-        scomm = 'SELECT {} \
-                 FROM author A \
-                 INNER JOIN paper_author_mapping P2A \
-                 ON P2A.author_id=A.author_id \
+        scomm = 'SELECT {} FROM author A \
+                 INNER JOIN paper_author_mapping P2A ON P2A.author_id=A.id \
                  WHERE {}'.format(pcols, constraints_str)
             
         R = self.execute_and_get_results(scomm, cols)
@@ -66,7 +95,7 @@ class MatScienceDB(object):
                 out[a][name] = np.array(R[col])[A==a]
         return out
 
-    def get_NoA_by_paper_ids(self, paper_ids):
+    def get_NoA_by_PID(self, paper_ids):
         """Getting Number of Authors (NoA) of a set of paper IDs
 
         This can be basically done by counting the authors retuned by the previous method.
@@ -82,8 +111,7 @@ class MatScienceDB(object):
         constraints_str = 'P2A.paper_id IN {}'.format(ID_list_str)
 
         scomm = 'SELECT P2A.paper_id, COUNT(*) FROM author A \
-                 INNER JOIN paper_author_mapping P2A \
-                 ON P2A.author_id=A.author_id \
+                 INNER JOIN paper_author_mapping P2A ON P2A.author_id=A.id \
                  WHERE {} GROUP BY P2A.paper_id;'.format(constraints_str)
 
         self.crsr.execute(scomm)
@@ -92,7 +120,7 @@ class MatScienceDB(object):
         return dict(res)
 
     
-    def get_authors_by_chemicals(self, formula, **kwargs):
+    def get_LoA_by_ents(self, ent_names, **kwargs):
         """Getting the list of authors who (co)-authored papers that include
         one of the given chemicals in their titles/abstracts
 
@@ -101,39 +129,41 @@ class MatScienceDB(object):
         returning papers too.
         """
 
-        cols = kwargs.get('cols', ['author_id'])
-        cols = [col if '.' in col else 'A.{}'.format(col) for col in cols] + ['C.formula']
+        cols = kwargs.get('cols', ['id'])
         years = kwargs.get('years', [])
         return_papers = kwargs.get('return_papers', False)
+
+        cols = [col if '.' in col else 'A.{}'.format(col) for col in cols] + \
+            ['E.{}'.format(self.entity_col)]
+        pcols = ','.join(cols)
+        if return_papers:
+            pcols += ',P.id AS paper_id'
+            cols += ['.paper_id']
         
-        formula = ['"{}"'.format(c) for c in formula]
-        constraints_str = 'C.formula IN ({})'.format(', '.join(formula))
+
+        ent_names = ['"{}"'.format(c) for c in ent_names]
+        constraints_str = 'E.{} IN ({})'.format(self.entity_col, ','.join(ent_names))
 
         if len(years)>0:
             yrs_arr = ','.join([str(x) for x in years])
             constraints_str = '({}) AND YEAR(P.date) IN ({})'.format(
                 constraints_str, yrs_arr)
 
-        if return_papers:
-            cols += ['P.paper_id']
-        pcols = ','.join(cols)
-
-
-        scomm = 'SELECT {} \
-                 FROM author A \
-                 INNER JOIN paper_author_mapping P2A ON P2A.author_id=A.author_id \
-                 INNER JOIN chemical_paper_mapping C2P ON C2P.paper_id=P2A.paper_id \
-                 INNER JOIN paper P ON P.paper_id=P2A.paper_id \
-                 INNER JOIN chemical C ON C.chem_id=C2P.chem_id \
-                 WHERE {};'.format(pcols, constraints_str)
+        scomm = 'SELECT {} FROM author A \
+                 INNER JOIN paper_author_mapping P2A ON P2A.author_id=A.id \
+                 INNER JOIN {}_paper_mapping E2P ON E2P.paper_id=P2A.paper_id \
+                 INNER JOIN paper P ON P.id=P2A.paper_id \
+                 INNER JOIN {} E ON E.id=E2P.{}_id \
+                 WHERE {};'.format(pcols, self.entity_tab, self.entity_tab,
+                                   self.entity_tab, constraints_str)
 
         cols = [col.split('.')[1] for col in cols]
         R = self.execute_and_get_results(scomm, cols)
         if len(R)==0:
             return []
 
-        A = np.array(R['formula'])
-        cols.remove('formula')
+        A = np.array(R[self.entity_col])
+        cols.remove(self.entity_col)
         out = {}
         for a in np.unique(A):
             out[a] = {}
@@ -172,26 +202,24 @@ class MatScienceDB(object):
                 constraints_str, yrs_arr)
 
         if return_papers:
-            cols += ['P.paper_id']
+            cols += ['P.id']
         pcols = ','.join(cols)
 
         scomm = 'SELECT {} \
                  FROM author A \
-                 INNER JOIN paper_author_mapping P2A \
-                 ON P2A.author_id=A.author_id \
-                 INNER JOIN paper P \
-                 ON P.paper_id=P2A.paper_id \
+                 INNER JOIN paper_author_mapping P2A ON P2A.author_id=A.id \
+                 INNER JOIN paper P ON P.id=P2A.paper_id \
                  WHERE {};'.format(pcols, constraints_str)
 
         return self.execute_and_get_results(scomm, [col.split('.')[1] for col in cols])    
         
     
-    def get_papers_by_author_ids(self, author_ids, **kwargs):
+    def get_LoP_by_AID(self, author_ids, **kwargs):
         """Getting papers of a set of authors
         """
 
         years = kwargs.get('years',[])
-        cols = kwargs.get('cols', ['paper_id'])
+        cols = kwargs.get('cols', ['id'])
 
         # taking care of the column headers
         cols = ['P.{}'.format(col) for col in cols] + ['P2A.author_id']
@@ -207,10 +235,8 @@ class MatScienceDB(object):
             years_arr = ','.join([str(x) for x in years])
             constraints_str = '{} AND YEAR(P.date) IN ({})'.format(constraints_str, years_arr)
             
-        scomm = 'SELECT {} \
-                 FROM paper P \
-                 INNER JOIN paper_author_mapping P2A \
-                 ON P2A.paper_id=P.paper_id \
+        scomm = 'SELECT {} FROM paper P \
+                 INNER JOIN paper_author_mapping P2A ON P2A.paper_id=P.id \
                  WHERE {}'.format(pcols, constraints_str)
 
         cols = [col.split('.')[1] for col in cols]
@@ -218,8 +244,8 @@ class MatScienceDB(object):
         if len(R)==0:
             return []
         
-        A = np.array(R['author_id'])
-        cols.remove('author_id')
+        A = np.array(R['id'])
+        cols.remove('id')
         out = {}
         for a in np.unique(A):
             out[a] = {}
@@ -228,7 +254,7 @@ class MatScienceDB(object):
         return out
 
         
-    def get_NoP_by_author_ids(self, author_ids, **kwargs):
+    def get_NoP_by_AID(self, author_ids, **kwargs):
         """Getting Number of Papers (NoP) by author IDs
 
         This can be basically done by counting the papers retuned by the previous method.
@@ -250,7 +276,7 @@ class MatScienceDB(object):
             constraints_str = '{} AND YEAR(P.date) IN ({})'.format(constraints_str, years_arr)
 
         scomm = "SELECT P2A.author_id, COUNT(*) FROM paper P \
-                 INNER JOIN paper_author_mapping P2A ON P2A.paper_id=P.paper_id \
+                 INNER JOIN paper_author_mapping P2A ON P2A.paper_id=P.id \
                  WHERE {} GROUP BY P2A.author_id".format(constraints_str)
 
         self.crsr.execute(scomm)
@@ -259,39 +285,37 @@ class MatScienceDB(object):
         return dict(res)
 
     
-    def get_papers_by_chemicals(self, chemical_formula, **kwargs):
+    def get_LoP_by_ents(self, names, **kwargs):
         """Returning papers whose titles/abstracts have at least one of
         the given chemical formula
         """
 
         years = kwargs.get('years',[])
-        cols = kwargs.get('cols', ['paper_id'])
-        cols = [col if '.' in col else 'P.{}'.format(col) for col in cols] + ['C.formula']
+        cols = kwargs.get('cols', ['id'])
+        cols = [col if '.' in col else 'P.{}'.format(col) for col in cols] + \
+            ['E.{}'.format(self.entity_col)]
         pcols = ','.join(cols)
         
-        chemical_formula = ['"{}"'.format(c) for c in chemical_formula]
-        constraints_str = 'C.formula IN ({})'.format(', '.join(chemical_formula))
+        names = ['"{}"'.format(c) for c in names]
+        constraints_str = 'C.formula IN ({})'.format(', '.join(names))
 
         if len(years)>0:
             years_arr = ','.join([str(x) for x in years])
             constraints_str = '{} AND YEAR(P.date) IN ({})'.format(constraints_str, years_arr)
 
-
-        scomm = 'SELECT {} \
-                 FROM paper P \
-                 INNER JOIN chemical_paper_mapping C2P \
-                 ON P.paper_id=C2P.paper_id \
-                 INNER JOIN chemical C \
-                 ON C2P.chem_id=C.chem_id \
-                 WHERE {}'.format(pcols, constraints_str)
+        scomm = 'SELECT {} FROM paper P \
+                 INNER JOIN {}_paper_mapping E2P ON P.id=E2P.paper_id \
+                 INNER JOIN {} E ON E2P.{}_id=E.id \
+                 WHERE {};'.format(pcols, self.entity_tab, self.entity_tab,
+                                   self.entity_tab, constraints_str)
 
         cols = [col.split('.')[1] for col in cols]
         R = self.execute_and_get_results(scomm, cols)
         if len(R)==0:
             return []
         
-        A = np.array(R['formula'])
-        cols.remove('formula')
+        A = np.array(R[self.entity_col])
+        cols.remove(self.entity_col)
         out = {}
         for a in np.unique(A):
             out[a] = {}
@@ -311,7 +335,7 @@ class MatScienceDB(object):
         be searched in a case-sensitive fashion. 
         """
 
-        cols = kwargs.get('cols',['paper_id'])
+        cols = kwargs.get('cols',['id'])
         cols = [col if '.' in col else 'P.{}'.format(col) for col in cols]
         pcols = ','.join(cols)
         years = kwargs.get('years', [])
@@ -330,23 +354,21 @@ class MatScienceDB(object):
             constraints_str = '({}) AND YEAR(P.date) IN ({})'.format(
                 constraints_str, yrs_arr)
 
-
-        scomm = 'SELECT {} \
-                 FROM paper P \
+        scomm = 'SELECT {} FROM paper P \
                  WHERE {};'.format(pcols, constraints_str)
         
         return self.execute_and_get_results(scomm, [col.split('.')[1] for col in cols])
 
     
-    def get_chemicals_by_paper_ids(self, paper_ids, **kwargs):
-        """Returning a list of chemicals that are present in the 
+    def get_LoE_by_PID(self, paper_ids, **kwargs):
+        """Returning a List of enities that are present in the 
         titles/abstracts of the given papers
         """
 
-        cols = kwargs.get('cols',['chem_id'])
+        cols = kwargs.get('cols',['id'])
 
         # taking care of the column headers
-        cols = ['C.{}'.format(col) for col in cols] + ['C2P.paper_id']
+        cols = ['E.{}'.format(col) for col in cols] + ['E2P.paper_id']
         pcols = ','.join(cols)
 
         # taking care of the constraints
@@ -354,20 +376,18 @@ class MatScienceDB(object):
             paper_ids = [paper_ids]
         # a list of paper IDs
         ID_list_str = '({})'.format(', '.join([str(a) for a in paper_ids]))
-        constraints_str = 'C2P.paper_id IN {}'.format(ID_list_str)
+        constraints_str = 'E2P.paper_id IN {}'.format(ID_list_str)
         
-        scomm = 'SELECT {} \
-                 FROM chemical C \
-                 INNER JOIN chemical_paper_mapping C2P \
-                 ON C2P.chem_id=C.chem_id \
-                 WHERE {}'.format(pcols, constraints_str)
-
+        scomm = 'SELECT {} FROM {} E \
+                 INNER JOIN {}_paper_mapping E2P ON E2P.{}_id=E.id \
+                 WHERE {}'.format(pcols, self.entity_tab, self.entity_tab,
+                                  self.entity_tab, constraints_str)
 
         R = self.execute_and_get_results(scomm, cols)
         if len(R)==0:
             return []
         
-        A = np.array(R['C2P.paper_id'])
+        A = np.array(R['E2P.paper_id'])
         out = {}
         for a in np.unique(A):
             out[a] = {}
@@ -377,8 +397,8 @@ class MatScienceDB(object):
         return out
 
 
-    def get_NoC_by_paper_ids(self, paper_ids):
-        """Getting Number of Chemicals (NoC) of a set of paper IDs
+    def get_NoE_by_PID(self, paper_ids):
+        """Getting Number of Entities (NoE) of a set of paper IDs
 
         This can be basically done by counting the chemicals retuned by the previous method.
         However, we are adding a separate method for this purpose because it
@@ -390,12 +410,12 @@ class MatScienceDB(object):
             paper_ids = [paper_ids]
         # a list of paper IDs
         ID_list_str = '({})'.format(', '.join([str(a) for a in paper_ids]))
-        constraints_str = 'C2P.paper_id IN {}'.format(ID_list_str)
+        constraints_str = 'E2P.paper_id IN {}'.format(ID_list_str)
 
-        scomm = 'SELECT C2P.paper_id, COUNT(*) FROM chemical C \
-                 INNER JOIN chemical_paper_mapping C2P \
-                 ON C2P.chem_id=C.chem_id \
-                 WHERE {} GROUP BY C2P.paper_id;'.format(constraints_str)
+        scomm = 'SELECT E2P.paper_id, COUNT(*) FROM {} E \
+                 INNER JOIN {}_paper_mapping E2P ON E2P.{}_id=E.id \
+                 WHERE {} GROUP BY E2P.paper_id;'.format(self.entity_tab, self.entity_tab,
+                                                         self.entity_tab, constraints_str)
 
         self.crsr.execute(scomm)
         res = self.crsr.fetchall()
