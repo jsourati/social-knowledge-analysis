@@ -35,8 +35,11 @@ def compute_vertex_matrix(db, **kwargs):
     savefile_path = kwargs.get('savefile_path',None)
 
     nP = db.count_table_rows('paper')
+    Pids = db.get_1d_query('SELECT id FROM paper;')
     nA = db.count_table_rows('author')
+    Aids = db.get_1d_query('SELECT id FROM author;')
     nE = db.count_table_rows(db.entity_tab)
+    Eids = db.get_1d_query('SELECT id FROM {};'.format(db.entity_tab))
     logger.info('#papers={}, #author={}, #entities={}'.format(nP,nA,nE))
     
     VM = sparse.lil_matrix((nP,nA+nE), dtype=np.uint8)
@@ -45,17 +48,21 @@ def compute_vertex_matrix(db, **kwargs):
     batch_size = 500
     logger.info('Starting to fill the vertex matrix with batche size {}'.format(batch_size))
     while cnt<nP:
-        pids = np.arange(cnt, cnt + batch_size)
-        auids = db.get_LoA_by_PID(pids)
-        eids = db.get_LoE_by_PID(pids)
+        inds = np.arange(cnt, min(cnt + batch_size, nP-1))
+        batch_Pids = Pids[inds]
+        q_Aids = db.get_LoA_by_PID(batch_Pids)
+        q_Eids = db.get_LoE_by_PID(batch_Pids)
 
         cols = []
         rows = []
-        for i,pid in enumerate(pids):
-            au_cols  = auids[pid]['id'] if pid in auids else []
-            ent_cols = eids[pid]['id'] + nA if pid in eids else []
+        for i,pid in enumerate(batch_Pids):
+            # each PID has a number of authors and entities;
+            # locate them in the global array of author and entity IDs;
+            # these locations would be their rows in vertex matrix
+            au_cols  = np.where(np.isin(Aids, q_Aids[pid]['id']))[0] if pid in q_Aids else []
+            ent_cols = np.where(np.isin(Eids, q_Eids[pid]['id']))[0]+nA if pid in q_Eids else []
             cols += [np.concatenate((au_cols, ent_cols))]
-            rows += [pid*np.ones(len(au_cols)+len(ent_cols))]
+            rows += [inds[i]*np.ones(len(au_cols)+len(ent_cols))]
 
         cols = np.concatenate(cols)
         rows = np.concatenate(rows)
@@ -340,6 +347,7 @@ def random_walk_seq(R, start_idx, L,
     
 
 def gen_DeepWalk_sentences_fromKW(R,
+                                  db,
                                   ratio,
                                   length,
                                   size,
@@ -361,15 +369,20 @@ def gen_DeepWalk_sentences_fromKW(R,
     choosing a chemical node to the probability of author selection (if two types
     of nodes are present), or an array-line that determines mixture coefficients
     corresponding to various groups of nodes (if multiples types of nodes are present)
+
+    The argument `block_types` determines groups of columns that exist in the given
+    vertex matrix R. It should be given as a dictionary with a format like the following:
+    {'author': nA, 'entity': nE}, where nA and nE are the number of author nodes and
+    entity nodes, respectively.
     """
 
-    msdb.crsr.execute('SELECT formula FROM chemical;')
-    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+    ents = db.get_1d_query('SELECT {} FROM {};'.format(db.entity_col, db.entity_tab))
 
     if len(block_types)==0:
-        nA = 1739453
-        nC = 107466
-        type_ranges = {'author': [0,nA], 'chemical': [nA,nA+nC]}
+        nA = db.count_table_rows('author')
+        nE = db.count_table_rows(db.entity_tab)
+        block_types = {'author': nA, 'entity': nE}
+        type_ranges = {'author': [0,nA], 'entity': [nA,nA+nE]}
     else:
         assert np.sum([v[1] for v in block_types])==R.shape[1]-1, \
             'Sum of sizes in block_types should be equal to the number of columns in R.'
@@ -388,24 +401,24 @@ def gen_DeepWalk_sentences_fromKW(R,
                     return 'a_{}'.format(idx-v[0])
                 elif k=='affiliation':
                     return 'aff_{}'.format(idx-v[0])
-                elif k=='chemical':
-                    return chems[idx-v[0]]
+                elif k=='entity':
+                    return ents[idx-v[0]]
                 
         # if the entry does not belong to any of the ranges --> KW
-        return keyword    
+        return keyword
 
     
     if ratio is None:
         f = None
     elif np.isscalar(ratio):
         if 0 < ratio < np.inf:
-            f = lambda data: node_weighting_alpha(data, ratio)
+            f = lambda data: node_weighting_alpha(data, ratio, block_types)
         elif ratio==np.inf:
-            f = lambda data: node_weighting_chem(data)
+            f = lambda data: node_weighting_ent(data, block_types)
         elif ratio==0:
-            f = lambda data: node_weighting_author(data)
+            f = lambda data: node_weighting_author(data, block_types)
     else:
-        assert len(block_types)>0, 'Having array-like ratio is only for multiple types of nodes'
+        assert len(block_types)>2, 'Having array-like ratio is only for multiple types of nodes'
         f = lambda data: node_weighting_waff(data, ratio)
 
     increments = None
@@ -452,13 +465,22 @@ def gen_DeepWalk_sentences_fromKW(R,
     return sents, eseqs_list
 
 
-def node_weighting_chem(data):
+def node_weighting_ent(data, block_types):
     """Weighting nodes such that only chemicals are sampled; if there is
     no chemical is selected among the nodes, an all-zero vector will be returned 
     (i.e., random walk will be terminated)
+
+    *Paramters*:
+
+    ** data: array
+       one row of the vertex matri
+
+    ** block_types: dict
+       types and size of each block of columns in the vertex matrix
+
     """
 
-    nA = 1739453
+    nA = block_types['author']
     data[:nA] = 0
     if np.any(data>0):
         data = data/np.sum(data)
@@ -504,11 +526,19 @@ def node_weighting_waff(data, pies):
     return data
     
     
-def node_weighting_author(data):
+def node_weighting_author(data, block_types):
     """Similar to node_weighting_chems but for authors
+
+    *Paramters*:
+
+    ** data: array
+       one row of the vertex matri
+
+    ** block_types: dict
+       types and size of each block of columns in the vertex matrix
     """
 
-    nA = 1739453
+    nA = block_types['author']
     data[nA:] = 0
     if np.any(data>0):
         data = data/np.sum(data)
@@ -516,25 +546,40 @@ def node_weighting_author(data):
     return data
 
 
-def node_weighting_alpha(data, alpha):
+def node_weighting_alpha(data, alpha, block_types):
     """Giving weights to existing nodes in a hyperedge  such that
     the probabiliy of choosing chemical nodes is alpha times the
     probability of choosing an author node in each random walk step
+
+    *Parameters*:
+
+    ** data: array
+       one row of the vertex matri
+
+    ** alpha: scalar
+       P(sampling from entities) / P(sampling from authors)
+
+    ** block_types: dict
+       types and size of each block of columns in the vertex matrix (here,
+       it should have only two types with keys `authors` and `entity`
     """
+
+    assert len(block_types)==2, "node-weighting with alpha should be used " \
+        "only with two types of vertex nodes, here we have {}".format(len(block_types))
     
-    nA = 1739453
-    nC = 107466
+    nA = block_types['author']
+    nE = block_types['entity']
     
     A = np.sum(data[:nA]) + data[-1]  # assume data[-1]=KW
-    C = np.sum(data[nA:nA+nC])
-    if A>0 and C>0:
+    E = np.sum(data[nA:nA+nE])
+    if A>0 and E>0:
         data[:nA] = data[:nA] / ((alpha+1)*A)
         data[-1] = data[-1] / ((alpha+1)*A)
-        data[nA:nA+nC] = alpha*data[nA:nA+nC] /  ((alpha+1)*C)
-    elif A>0 and C==0:
+        data[nA:nA+nE] = alpha*data[nA:nA+nE] /  ((alpha+1)*E)
+    elif A>0 and E==0:
         data[:nA] = data[:nA]/A
-    elif A==0 and C>0:
-        data[nA:nA+nC] = data[nA:nA+nC]/C
+    elif A==0 and E>0:
+        data[nA:nA+nE] = data[nA:nA+nE]/E
         
     return data
 
