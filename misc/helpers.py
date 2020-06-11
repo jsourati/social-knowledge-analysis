@@ -58,11 +58,16 @@ def prune_deepwalk_sentences(sents, remove='author'):
     elif remove=='chemical':
         hl = [[s for s in h.split(' ') if ('a_' in s) or ('thermoelectric' in s)]
               for h in sents]
+    elif remove=='author_affiliation':
+        hl = [[s for s in h.split(' ') if '_' not in s] for h in sents]
 
     # rejoining the split terms and ignoring those with singular terms
     hl = [' '.join(h) for h in hl if len(h)>1]
 
     # removing dots
-    hl = [h.split('.')[0] for h in hl]
+    #hl = [h.split('.')[0] for h in hl]
+
+    # removing those sentences only containing the keyword
+    hl = [h for h in hl if len(np.unique(h.split(' ')))>1]
 
     return hl
