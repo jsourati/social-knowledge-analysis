@@ -16,7 +16,10 @@ from misc import helpers
 from data import utils, readers
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
-msdb = readers.MatScienceDB(config_path, 'msdb')
+msdb = readers.DB(config_path,
+                  db_name='msdb',
+                  entity_tab='chemical',
+                  entity_col='formula')
 
 
 def ySD(cocrs, ySD, years_of_cocrs_columns, **kwargs):

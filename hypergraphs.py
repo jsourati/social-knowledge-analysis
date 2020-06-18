@@ -11,12 +11,19 @@ from collections import deque
 
 from gensim.models import Word2Vec
 
-
 path = '/home/jamshid/codes/social-knowledge-analysis'
 sys.path.insert(0, path)
 
 from data import readers
 from misc import helpers
+
+config_path = '/home/jamshid/codes/data/sql_config_0.json'
+msdb = readers.DB(config_path,
+                  db_name='msdb',
+                  entity_tab='chemical',
+                  entity_col='formula')
+
+
 
 def compute_vertex_matrix(db, **kwargs):
     """Forming vertex matrix of the hypergraph, which is a |E|x|V|
@@ -48,7 +55,7 @@ def compute_vertex_matrix(db, **kwargs):
     batch_size = 500
     logger.info('Starting to fill the vertex matrix with batche size {}'.format(batch_size))
     while cnt<nP:
-        inds = np.arange(cnt, min(cnt + batch_size, nP-1))
+        inds = np.arange(cnt, min(cnt + batch_size, nP))
         batch_Pids = Pids[inds]
         q_Aids = db.get_LoA_by_PID(batch_Pids)
         q_Eids = db.get_LoE_by_PID(batch_Pids)
@@ -61,10 +68,12 @@ def compute_vertex_matrix(db, **kwargs):
             # these locations would be their rows in vertex matrix
             au_cols  = np.where(np.isin(Aids, q_Aids[pid]['id']))[0] if pid in q_Aids else []
             ent_cols = np.where(np.isin(Eids, q_Eids[pid]['id']))[0]+nA if pid in q_Eids else []
+            
             cols += [np.concatenate((au_cols, ent_cols))]
             rows += [inds[i]*np.ones(len(au_cols)+len(ent_cols))]
 
         cols = np.concatenate(cols)
+            
         rows = np.concatenate(rows)
         VM[rows,cols] = 1
 
@@ -217,7 +226,7 @@ def restrict_rows_to_years(R, years):
     """ Restricting R to Articles in the Specified Years """
     # choosing rows (articles) associated with the given years
     yrs_arr = ','.join([str(x) for x in years])
-    msdb.crsr.execute('SELECT paper_id FROM paper WHERE \
+    msdb.crsr.execute('SELECT id FROM paper WHERE \
                        YEAR(date) IN ({});'.format(yrs_arr))
     yr_pids = np.array([x[0] for x in msdb.crsr.fetchall()])
     R = R[yr_pids,:]

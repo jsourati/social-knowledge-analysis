@@ -66,6 +66,11 @@ class DB(object):
         return self.crsr.fetchall()[0][0]
 
     
+    def get_1d_query(self, scomm):
+        self.crsr.execute(scomm)
+        return np.array([x[0] for x in self.crsr.fetchall()])
+
+    
     def get_LoA_by_PID(self, paper_ids, **kwargs):
 
         cols = kwargs.get('cols', ['id'])

@@ -17,7 +17,10 @@ from misc import helpers
 from data import utils, readers
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
-msdb = readers.MatScienceDB(config_path, 'msdb')
+msdb = readers.DB(config_path,
+                  db_name='msdb',
+                  entity_tab='chemical',
+                  entity_col='formula')
 
 pr = utils.MaterialsTextProcessor()
 
@@ -216,6 +219,7 @@ def eval_predictor(chems,
     wvmodel = kwargs.get('wvmodel', None)
     count_threshold = kwargs.get('count_threshold', 0)
     save_path = kwargs.get('save_path', None)
+    return_preds = kwargs.get('return_preds', False)
     logfile_path = kwargs.get('logfile_path', None)
     logger_disable = kwargs.get('logger_disable',False)
     logger = helpers.set_up_logger(__name__, logfile_path, logger_disable)
@@ -259,6 +263,7 @@ def eval_predictor(chems,
 
     """ Generating the Prediction """
     preds = predictor_func(year_of_pred,sub_chems)
+    logger.info('Number of actual predictions: {}'.format(len(preds)))
     if metric=='auc':
         if len(preds)!=2:
             raise ValueError('When asking for AUC metric, predictor should return score array too.')
@@ -269,12 +274,11 @@ def eval_predictor(chems,
         with open(save_path, 'w') as f:
             f.write('\n'.join(preds)+'\n')
     
-
     """ Evaluating the Predictions for the Upcoming Years """
     years_of_eval = np.arange(year_of_pred, 2019)
     mvals = np.zeros(len(years_of_eval))
     for i, yr in enumerate(years_of_eval):
-        gt = gt_func(yr, sub_chems)
+        gt = gt_func(yr, chems)
 
         if metric=='chr':      # Cumulative Hit Rate
             mvals[i] = mvals[i-1] + np.sum(np.in1d(gt, preds)) / len(preds)
@@ -283,7 +287,10 @@ def eval_predictor(chems,
             y[np.isin(preds, gt)] = 1
             mvals[i] = roc_auc_score(y, scores)
 
-    return mvals
+    if return_preds:
+        return mvals, preds
+    else:
+        return mvals
 
 
 def eval_author_predictor(discoverers_predictor_func,

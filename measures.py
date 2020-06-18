@@ -21,7 +21,12 @@ from hypergraphs import compute_transprob, compute_multistep_transprob, \
    restrict_rows_to_years
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
-msdb = readers.MatScienceDB(config_path, 'msdb')
+msdb = readers.DB(config_path,
+                  db_name='msdb',
+                  entity_tab='chemical',
+                  entity_col='formula')
+
+
 #pr = MatTextProcessor()
 
 ignored_toks = ["from", "as", "at", "by", "of", "on", "into", "to", "than", "all", "its",
@@ -247,8 +252,7 @@ def accessibility_scores(years, **kwargs):
     third chunk to the property-related keywords.
     """
 
-    msdb.crsr.execute('SELECT formula FROM chemical;')
-    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+    chems = msdb.get_1d_query('SELECT formula FROM chemical;')
 
     R = kwargs.get('R', None)
     path_VM_core = kwargs.get('path_VM_core', None)
