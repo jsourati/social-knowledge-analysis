@@ -297,6 +297,7 @@ def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
 def random_walk_seq(R, start_idx, L,
                     lazy=True,
                     node_weight_func=None,
+                    node2vec_q=None,
                     rand_seed=None):
     """Generating a random walk with a specific length and from 
     a starting point 
@@ -316,15 +317,23 @@ def random_walk_seq(R, start_idx, L,
     else:
         randgen = np.random.sample
 
+    if node2vec_q is not None:
+        q = node2vec_q
+        prev_idx = None    # previous (hyper)node 
+
     v = start_idx
     for i in range(L-1):
 
         # selecting edge
-        v_edges = R[:,v].indices
-        edge_weights = R[:,v].data   # this is an np.array
+        if node2vec_q is not None:
+            e = node2vec_sample_edge(R, v, prev_idx, q, randgen)
+            prev_idx = v   # update previous node
+        else:
+            v_edges = R[:,v].indices
+            edge_weights = R[:,v].data   # this is an np.array
+            eind = (edge_weights/edge_weights.sum()).cumsum().searchsorted(randgen())
+            e = v_edges[eind]
         
-        eind = (edge_weights/edge_weights.sum()).cumsum().searchsorted(randgen())
-        e = v_edges[eind]
         eseq += [e]
 
         # selecting a node inside e
@@ -365,6 +374,7 @@ def gen_DeepWalk_sentences_fromKW(R,
                                   length,
                                   size,
                                   keyword,
+                                  node2vec_q=None,
                                   block_types=[],
                                   file_path=None,
                                   eseq_file_path = None,
@@ -446,6 +456,7 @@ def gen_DeepWalk_sentences_fromKW(R,
         seq, eseq = random_walk_seq(R, R.shape[1]-1, length,
                                     lazy=False,
                                     node_weight_func=f,
+                                    node2vec_q=node2vec_q,
                                     rand_seed=None if rand_seed is None else rand_seed+increments[i])
         eseqs_list += [' '.join([str(x) for x in eseq])]
 
@@ -478,6 +489,30 @@ def gen_DeepWalk_sentences_fromKW(R,
     return sents, eseqs_list
 
 
+def node2vec_sample_edge(R, curr_idx, prev_idx, q, randgen):
+    """Sampling an edge in a node2vec style, starting from
+    a current node `curr_idx` and given the previous node `prev_idx`
+    with `p` and `q` the return and in-out parameters, respectively
+    """
+
+    N0 = R[:,curr_idx].indices
+    
+    # regular sampling in the first step
+    if prev_idx is None:
+        edge_weights = R[:,curr_idx].data   # this is an np.array
+    else:
+        # see which papers in N0 include previous node too (N0 intersect. N_{-1})
+        edge_weights = np.ones(len(N0))
+        N1 = R[:,prev_idx].indices
+        edge_weights[np.isin(N0,N1)] = 1      # d_tx=1 in node2vec
+        edge_weights[~np.isin(N0,N1)] = 1/q   # d_tx=2 in node2vec
+
+    eind = (edge_weights/edge_weights.sum()).cumsum().searchsorted(randgen())
+    e = N0[eind]
+    
+    return e
+    
+    
 def node_weighting_ent(data, block_types):
     """Weighting nodes such that only chemicals are sampled; if there is
     no chemical is selected among the nodes, an all-zero vector will be returned 
