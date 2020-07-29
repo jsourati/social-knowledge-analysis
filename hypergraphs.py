@@ -24,6 +24,10 @@ msdb = readers.DB(config_path,
                   entity_col='formula')
 
 
+logger = logging.getLogger()
+logger.handlers = [logging.StreamHandler()]
+logger.setLevel(logging.INFO)
+
 
 def compute_vertex_matrix(db, **kwargs):
     """Forming vertex matrix of the hypergraph, which is a |E|x|V|
@@ -660,51 +664,50 @@ def random_chem_select(E, P2C_dict):
 
     return choices
 
-def bfs(R, start_idx, stopping_points=[]):
-    """Breadth first search algorithm for strating from a 
-    given point and returning its connected component
 
-    If a set of stopping points are given, the BFS algorithm
-    stops each time it encounters an index in stoppin_points (ignoring
-    all its neighbors and children), and the output will
-    be a subset of stopping points that are in the same 
-    connected component
+def compute_av_first_passage_distance(sents, node_1, nodes_2, return_indiv_dists=False):
+    """Computing average-first-passage distance metric from a given 
+    node (`node_1`) and a set of other nodes (`nodes_2`)
+
+    The assumption here is that all the sentences starat with the source node 
+    (`node_1`) hence it always occurs at least once before the occurences of any
+    given target node (those in `nodes_2`)
     """
 
-    logger = helpers.set_up_logger(__name__, None,False)
+    dists_dict = {x:[] for x in nodes_2}
+    dists = np.zeros(len(nodes_2))
+    
+    for ii,sent in enumerate(sents):
+        toks = np.array(sent.split(' '))
+        locs1 = np.where(toks==node_1)[0]
 
-    visited = [start_idx]
-    dists = {start_idx: 0}
-    final_dists = {start_idx: 0}
-    Q = deque([start_idx])
+        for tarnode in nodes_2:
+            if tarnode not in toks: continue
 
+            locs2 = np.where(toks==tarnode)[0]
+            
+            # distances of all occurrences of node_2 to
+            # node_1 in this sentence: for each occurrence of
+            # node_2, the distance is defined as the number of steps
+            # taken from the "last node_1 occurred before it".
+            pdists = [x-locs1 for x in locs2]
+            
+            dists_to1 = {x: [] for x in range(len(locs1))}
+            for i,pd in enumerate(pdists):
+                dists_to1[np.max(np.where(pd>0)[0])] += [np.min(pd[pd>0])]
 
-    logcnt = 100
-    while len(Q)>0:
-        v = Q.popleft()
-        N = find_neighbors(v,R)
+            dists_dict[tarnode] += [np.min(x) for x in dists_to1.values() if len(x)>0]
 
-        # consider only the unvisited points
-        N = N[~np.isin(N,visited)]
-        dists.update({u: dists[v]+1 for u in N})
-        visited += list(N)
-        
-        stop_indic = np.isin(N, stopping_points)
-        u_stops = N[stop_indic]
-        u_nonstops = N[~stop_indic]
-        
-        # only add non-stopping points to the queue
-        Q.extend(list(u_nonstops))
-        
-        # add stopping points to final_dists
-        final_dists.update({u: dists[v]+1 for u in u_stops})
-        
-        if len(final_dists)>logcnt:
-            logger.info('Length of added stops: {}, length of queue: {}'.format(len(final_dists), len(Q)))
-            logcnt += 100
+        if not((ii/len(sents))%0.25):
+            logger.info('%{} is completed..'.format(100*ii/len(sents)))
 
-    if len(stopping_points)>0:
-        return final_dists
+    dists = np.array([np.mean(dists_dict[x]) if len(dists_dict[x])>0 else np.nan
+                      for x in nodes_2])
+    #sims = np.array([np.sum([1./x for x in dists_dict[y]]) if len(dists_dict[y])>0 else np.nan
+    #                 for y in nodes_2])
+
+    if return_indiv_dists:
+        return dists, dists_dict
     else:
         return dists
-                    
+            
