@@ -86,6 +86,12 @@ def embedding(cocrs, years_of_cocrs_columns, model_or_path, y_term, **kwargs):
     
     def embedding_predictor(year_of_pred, sub_chems):
 
+        # make sure that the order of chemicals in sub_chems is the same as
+        # the order of their appearance in the universal array chems
+        # because the order of unstudied_indic that is used
+        # in the following lines corresponds to chems
+        sub_chems = chems[np.isin(chems,sub_chems)]
+
         # embedding-based predictions can only work with subset of chemicals
         # that exist in the vocabulary of their pre-trained model
         overlap_indic = np.in1d(chems, sub_chems)
@@ -279,6 +285,13 @@ def countsort_deepwalk(cocrs,
         if sub_chems is not None:
             overlap_indic = np.in1d(chems, sub_chems)
             sub_cocrs = cocrs[overlap_indic, :]
+
+            # make sure that the order of chemicals in sub_chems is the same as
+            # the order of their appearance in the universal array chems
+            # because the order of unstudied_indic that is used
+            # in the following lines corresponds to chems
+            sub_chems = chems[np.isin(chems,sub_chems)]
+
         else:
             sub_chems = chems
             sub_cocrs = cocrs
@@ -301,7 +314,54 @@ def countsort_deepwalk(cocrs,
 
     return countsort_deepwalk_predictor
 
+
+def first_passage_distance_deepwalk(cocrs,
+                                    years_of_cocrs_columns,
+                                    path_to_deepwalk,
+                                    **kwargs):
+
+    pred_size = kwargs.get('pred_size', 50)
+    return_scores = kwargs.get('return_scores', False)
+
+    # get all chemicals
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    # sentences
+    sents = open(path_to_deepwalk, 'r').read().splitlines()
+    KW = sents[0].split(' ')[0]
     
+    # get the present entities
+    dw_chems = hypergraphs.extract_chems_from_deepwalks(path_to_deepwalk)[0]
+    dists = hypergraphs.compute_av_first_passage_distance(sents, KW, dw_chems)
+
+    def predictor(year_of_pred, sub_chems):
+        if sub_chems is not None:
+            overlap_indic = np.in1d(chems, sub_chems)
+            sub_cocrs = cocrs[overlap_indic, :]
+            sub_chems = chems[np.isin(chems,sub_chems)]
+        else:
+            sub_chems = chems
+            sub_cocrs = cocrs
+
+        """ Restricting Attention to Unstudied Materials """
+        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
+        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
+        sub_chems = sub_chems[unstudied_indic]
+
+        # sort entities based on their counts in the deepwalk sentences
+        dw_sub_chems = dw_chems[np.isin(dw_chems, sub_chems)]
+        dw_dists = dists[np.isin(dw_chems, sub_chems)]
+        
+        sorted_inds = np.argsort(dw_dists)[:pred_size]
+
+        if return_scores:
+            return dw_sub_chems[sorted_inds], dists[sorted_inds]
+        else:
+            return dw_sub_chems[sorted_inds]
+
+    return predictor
+
 
 def hypergraph_author_accesss(path_to_VM_core,
                               path_to_VM_kw,
@@ -361,3 +421,91 @@ def author_embedding(model_or_path, y_term, **kwargs):
     return author_embedding_predictor
 
 
+def mfw2v_deepwalk(cocrs,
+                   years_of_cocrs_columns,
+                   mfw2v,
+                   **kwargs):
+
+    pred_size = kwargs.get('pred_size', 50)
+    return_scores = kwargs.get('return_scores', False)
+
+    # get all chemicals
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    # keyword is always the first token
+    KW = mfw2v.ind2tok[0]
+    def predictor(year_of_pred, sub_chems):
+        
+        if sub_chems is not None:
+            overlap_indic = np.in1d(chems, sub_chems)
+            sub_cocrs = cocrs[overlap_indic, :]
+            sub_chems = chems[np.isin(chems,sub_chems)]
+        else:
+            sub_chems = chems
+            sub_cocrs = cocrs
+
+        """ Restricting Attention to Unstudied Materials """
+        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
+        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
+        sub_chems = sub_chems[unstudied_indic]
+
+        # sort chemicals based on their counts in the deepwalk sentences
+        sorted_dw_chems = mfw2v.get_most_similar_terms(KW, None, len(mfw2v.uni_counts))
+        sorted_scores = np.array([x[1] for x in sorted_dw_chems])
+        sorted_dw_chems = np.array([x[0] for x in sorted_dw_chems])
+        sorted_dw_sub_chems = sorted_dw_chems[np.isin(sorted_dw_chems, sub_chems)]
+        sorted_dw_sub_chems_scores = sorted_scores[np.isin(sorted_dw_chems, sub_chems)]
+
+        if return_scores:
+            return sorted_dw_sub_chems[:pred_size], sorted_dw_chems_scores[:pred_size]
+        else:
+            return sorted_dw_sub_chems[:pred_size]
+
+    return predictor
+
+
+def pred_with_sims(cocrs,
+                   years_of_cocrs_columns,
+                   path_to_dw,
+                   path_to_sims,
+                   **kwargs):
+
+    pred_size = kwargs.get('pred_size', 50)
+    return_scores = kwargs.get('return_scores', False)
+
+    # get all chemicals
+    msdb.crsr.execute('SELECT formula FROM chemical;')
+    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+
+    dw_chems = hypergraphs.extract_chems_from_deepwalks(path_to_dw)[0]
+    
+    def predictor(year_of_pred, sub_chems):
+        
+        if sub_chems is not None:
+            overlap_indic = np.in1d(chems, sub_chems)
+            sub_cocrs = cocrs[overlap_indic, :]
+            sub_chems = chems[np.isin(chems,sub_chems)]
+        else:
+            sub_chems = chems
+            sub_cocrs = cocrs
+
+        """ Restricting Attention to Unstudied Materials """
+        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
+        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
+        sub_chems = sub_chems[unstudied_indic]
+        
+        # sort chemicals based on their similarities
+        sims = np.loadtxt(path_to_sims)
+
+        dw_sub_chems = dw_chems[np.isin(dw_chems, sub_chems)]
+        sub_sims = sims[np.isin(dw_chems,sub_chems)]
+        
+        sorted_inds = np.argsort(-sub_sims)[:pred_size]
+    
+        if return_scores:
+            return dw_sub_chems[sorted_inds], sub_sims[sorted_inds]
+        else:
+            return dw_sub_chems[sorted_inds]
+
+    return predictor
