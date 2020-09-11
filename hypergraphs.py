@@ -8,6 +8,7 @@ import pymysql
 import numpy as np
 from scipy import sparse
 from collections import deque
+from multiprocessing import Pool, cpu_count
 
 from gensim.models import Word2Vec
 
@@ -700,7 +701,9 @@ def random_chem_select(E, P2C_dict):
     return choices
 
 
-def compute_av_first_passage_distance(sents, node_1, nodes_2, return_indiv_dists=False):
+def compute_av_first_passage_distance(sents, node_1, nodes_2,
+                                      nworkers=None,
+                                      return_indiv_dists=False):
     """Computing average-first-passage distance metric from a given 
     node (`node_1`) and a set of other nodes (`nodes_2`)
 
@@ -709,33 +712,48 @@ def compute_av_first_passage_distance(sents, node_1, nodes_2, return_indiv_dists
     given target node (those in `nodes_2`)
     """
 
-    dists_dict = {x:[] for x in nodes_2}
-    dists = np.zeros(len(nodes_2))
+    # S: subset of nodes_2
+    def f(S):
+        
+        dists_dict = {x:[] for x in S}
+        for ii,sent in enumerate(sents):
+            toks = np.array(sent.split(' '))
+            locs1 = np.where(toks==node_1)[0]
+
+            for tarnode in S:
+                if tarnode not in toks: continue
+
+                locs2 = np.where(toks==tarnode)[0]
+
+                # distances of all occurrences of node_2 to
+                # node_1 in this sentence: for each occurrence of
+                # node_2, the distance is defined as the number of steps
+                # taken from the "last node_1 occurred before it".
+                pdists = [x-locs1 for x in locs2]
+
+                dists_to1 = {x: [] for x in range(len(locs1))}
+                for i,pd in enumerate(pdists):
+                    dists_to1[np.max(np.where(pd>0)[0])] += [np.min(pd[pd>0])]
+
+                dists_dict[tarnode] += [np.min(x) for x in dists_to1.values() if len(x)>0]
+
+            #if not((ii/len(sents))%0.25):
+            #    logger.info('%{} is completed..'.format(100*ii/len(sents)))
+
+        return dists_dict
+
+    if nworkers is None:
+        dists_dict = f(nodes_2)
+    else:
+        # THIS CANNOT BE DONE FOR NOW
+        # since a local function cannot be pickled by parallelizer
+        dists_dict = {}
+        chunksize = int(len(nodes_2)/nworkers)
+        with Pool(nworkers) as pool:
+            for res in pool.imap(f, nodes_2, chunksize):
+                dists_dict.update(res)
+
     
-    for ii,sent in enumerate(sents):
-        toks = np.array(sent.split(' '))
-        locs1 = np.where(toks==node_1)[0]
-
-        for tarnode in nodes_2:
-            if tarnode not in toks: continue
-
-            locs2 = np.where(toks==tarnode)[0]
-            
-            # distances of all occurrences of node_2 to
-            # node_1 in this sentence: for each occurrence of
-            # node_2, the distance is defined as the number of steps
-            # taken from the "last node_1 occurred before it".
-            pdists = [x-locs1 for x in locs2]
-            
-            dists_to1 = {x: [] for x in range(len(locs1))}
-            for i,pd in enumerate(pdists):
-                dists_to1[np.max(np.where(pd>0)[0])] += [np.min(pd[pd>0])]
-
-            dists_dict[tarnode] += [np.min(x) for x in dists_to1.values() if len(x)>0]
-
-        if not((ii/len(sents))%0.25):
-            logger.info('%{} is completed..'.format(100*ii/len(sents)))
-
     dists = np.array([np.mean(dists_dict[x]) if len(dists_dict[x])>0 else np.nan
                       for x in nodes_2])
     #sims = np.array([np.sum([1./x for x in dists_dict[y]]) if len(dists_dict[y])>0 else np.nan

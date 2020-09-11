@@ -1,6 +1,7 @@
 import os
 import sys
 import pdb
+import json
 import logging
 import numpy as np
 from scipy import sparse
@@ -214,7 +215,7 @@ def eval_predictor(chems,
     of prediction to 2018.
     """
 
-    metric = kwargs.get('metric', 'chr')
+    metric = kwargs.get('metric', 'cumul_precision')
     path_to_wvmodel = kwargs.get('path_to_wvmodel', None)
     wvmodel = kwargs.get('wvmodel', None)
     count_threshold = kwargs.get('count_threshold', 0)
@@ -251,10 +252,6 @@ def eval_predictor(chems,
         # get the intersection between the extracted chemicals and the full set
         model_chems_indic_in_full = np.in1d(chems, model_chems)
         sub_chems = chems[model_chems_indic_in_full]
-        logger.info('There are {} chemicals removed from model chemicals because' \
-                    'they were missing in the full chemical set'.format(
-                         np.sum(~model_chems_indic_in_full)))
-        logger.info('Number of total chemicals after correction: {}'.format(len(sub_chems)))
 
     else:
         # having sub_chems equal to None mean that gt/predictor should consider all chemicals
@@ -276,21 +273,27 @@ def eval_predictor(chems,
     
     """ Evaluating the Predictions for the Upcoming Years """
     years_of_eval = np.arange(year_of_pred, 2019)
-    mvals = np.zeros(len(years_of_eval))
+    iter_list = []  # to be the prec. values or actul disc. (for AUC)   
     for i, yr in enumerate(years_of_eval):
         gt = gt_func(yr, chems)
 
-        if metric=='chr':      # Cumulative Hit Rate
-            mvals[i] = mvals[i-1] + np.sum(np.in1d(gt, preds)) / len(preds)
+        if metric=='cumul_precision':      # Cumulative Precision
+            iter_list += [np.sum(np.in1d(gt, preds)) / len(preds)]
         elif metric=='auc':    # Area Under Curve
-            y = np.zeros(len(preds))
-            y[np.isin(preds, gt)] = 1
-            mvals[i] = roc_auc_score(y, scores)
+            iter_list += gt.tolist()
+
+    if metric == 'cumul_precision':
+        res = np.cumsum(iter_list)
+    elif metric == 'auc':
+        y = np.zeros(len(preds))
+        y[np.isin(preds,iter_list)] = 1
+        res = roc_auc_score(y, scores)
+    
 
     if return_preds:
-        return mvals, preds
+        return res, preds
     else:
-        return mvals
+        return res
 
 
 def eval_author_predictor(discoverers_predictor_func,
@@ -337,7 +340,19 @@ def gt_discoveries(cocrs, years_of_cocrs_columns):
         return sub_chems[disc_indics]
 
     return gt_disc_func
-    
+
+
+def gt_discoveries_4CTD(disease):
+
+    ds_dr_path = '/home/jamshid/codes/data/CTD/diseases_drugs.json'
+    target_ds_dr = json.load(open(ds_dr_path, 'r'))
+    rel_drugs = target_ds_dr[disease]
+
+    def gt_disc_func(yr):
+        return np.array([x for x,y in rel_drugs.items() if int(y)==yr])
+
+    return gt_disc_func
+
 
 def gt_discoverers(**kwargs):
 
