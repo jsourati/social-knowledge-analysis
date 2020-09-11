@@ -322,6 +322,10 @@ def first_passage_distance_deepwalk(cocrs,
 
     pred_size = kwargs.get('pred_size', 50)
     return_scores = kwargs.get('return_scores', False)
+    # saved_dists should be in form of a dictionary: {ent_x: AFP_x}
+    #                                                 -----  -----
+    #                                                 (str)  (float)
+    saved_dists = kwargs.get('saved_dists', None)
 
     # get all chemicals
     msdb.crsr.execute('SELECT formula FROM chemical;')
@@ -330,10 +334,14 @@ def first_passage_distance_deepwalk(cocrs,
     # sentences
     sents = open(path_to_deepwalk, 'r').read().splitlines()
     KW = sents[0].split(' ')[0]
-    
-    # get the present entities
-    dw_chems = hypergraphs.extract_chems_from_deepwalks(path_to_deepwalk)[0]
-    dists = hypergraphs.compute_av_first_passage_distance(sents, KW, dw_chems)
+
+    if saved_dists is None:
+        # get the present entities
+        dw_chems = hypergraphs.extract_chems_from_deepwalks(path_to_deepwalk)[0]
+        dists = hypergraphs.compute_av_first_passage_distance(sents, KW, dw_chems)
+    else:
+        dw_chems = np.array([x for x in saved_dists.keys()])
+        dists    = np.array([x for x in saved_dists.values()]) 
 
     def predictor(year_of_pred, sub_chems):
         if sub_chems is not None:
