@@ -10,7 +10,7 @@ import numpy as np
 path = '/home/jamshid/codes/social-knowledge-analysis/'
 sys.path.insert(0, path)
 from data import utils
-from misc.helpers import set_up_logger, find_first_time_cocrs
+from misc.helpers import set_up_logger #, find_first_time_cocrs
 
 class DB(object):
     """Class of databases that we will be wokring for running/evaluating
@@ -347,20 +347,21 @@ class DB(object):
         case_sensitives = kwargs.get('case_sensitives', [])
         logical_comb = kwargs.get('logical_comb', 'OR')
 
-        constraints_str = ['P.abstract LIKE "%{}%"'.format(k) for k in keywords]
+        constraints_str = ["(P.title LIKE '%{}%' OR P.abstract LIKE '%{}%')".format(k,k)
+                           for k in keywords]
         for k in case_sensitives:
             idx = np.where([x==k for x in keywords])
             idx = [] if len(idx)==0 else idx[0][0]
-            constraints_str[idx] = 'P.abstract LIKE BINARY "%{}%"'.format(k)
-        constraints_str = ' {} '.format(logical_comb).join(constraints_str)
+            constraints_str[idx] = "(P.title LIKE BINARY '%{}%' OR P.abstract LIKE BINARY '%{}%')".format(k,k)
+        constraints_str = " {} ".format(logical_comb).join(constraints_str)
 
         if len(years)>0:
             yrs_arr = ','.join([str(x) for x in years])
-            constraints_str = '({}) AND YEAR(P.date) IN ({})'.format(
+            constraints_str = "({}) AND YEAR(P.date) IN ({})".format(
                 constraints_str, yrs_arr)
 
-        scomm = 'SELECT {} FROM paper P \
-                 WHERE {};'.format(pcols, constraints_str)
+        scomm = "SELECT {} FROM paper P \
+                 WHERE {};".format(pcols, constraints_str)
         
         return self.execute_and_get_results(scomm, [col.split('.')[1] for col in cols])
 
