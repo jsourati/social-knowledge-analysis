@@ -69,106 +69,57 @@ def ySD(cocrs, ySD, years_of_cocrs_columns, **kwargs):
     return ySD_predictor
 
 
-def embedding(cocrs, years_of_cocrs_columns, model_or_path, y_term, **kwargs):
+def embedding(ents,
+              model_or_path,
+              keyword,
+              studied_ents_func,
+              **kwargs):
+    """
+
+    `studied_ents_func` should be a function that gets a year and
+    returns all the entities that have been studied up until that year
+    (excluding that year)
+
+    `kwargs.constraint_func` (if given) should be a function that takes
+    a set of entities and return those that satisfy a built-in constraint
+    """
 
     pred_size = kwargs.get('pred_size', 50)
     return_scores = kwargs.get('return_scores', False)
-    
-    # get all chemicals
-    msdb.crsr.execute('SELECT formula FROM chemical;')
-    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
-
+    constraint_func = kwargs.get('constraint_func', None)
+        
     if isinstance(model_or_path, str):
         model = Word2Vec.load(model_or_path)
     else:
         model = model_or_path
 
+    # in general, we cannot rely on the vocabulary of our model to
+    # form the set of entities, because if the model's vocabulary contains
+    # phrases, we cannot distinguish them from actual entities
+    voc = np.array([x for x in model.wv.vocab])
+    ents = ents[np.isin(ents,voc)]
     
-    def embedding_predictor(year_of_pred, sub_chems):
-
-        # make sure that the order of chemicals in sub_chems is the same as
-        # the order of their appearance in the universal array chems
-        # because the order of unstudied_indic that is used
-        # in the following lines corresponds to chems
-        sub_chems = chems[np.isin(chems,sub_chems)]
-
-        # embedding-based predictions can only work with subset of chemicals
-        # that exist in the vocabulary of their pre-trained model
-        overlap_indic = np.in1d(chems, sub_chems)
-        sub_cocrs = cocrs[overlap_indic, :]
+    def embedding_predictor(year_of_pred):
         
         """ Restricting Attention to Unstudied Materials """
-        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
-        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
-        sub_chems = sub_chems[unstudied_indic]
-
+        studied_ents = studied_ents_func(year_of_pred)
+        
         """ Computing and Sorting Scores """
-        scores = measures.cosine_sims(model, sub_chems, y_term)
+        unstudied_ents = ents[~np.isin(ents,studied_ents)]
+        # filter the unstudied entities if a constraint function is given
+        if constraint_func is not None:
+            unstudied_ents = constraint_func(unstudied_ents)
+        scores = measures.cosine_sims(model, unstudied_ents, keyword)
 
         sorted_inds = np.argsort(-scores)[:pred_size]
 
         if return_scores:
-            return sub_chems[sorted_inds], scores[sorted_inds]
+            return unstudied_ents[sorted_inds], scores[sorted_inds]
         else:
-            return sub_chems[sorted_inds]
+            return unstudied_ents[sorted_inds]
 
     return embedding_predictor
 
-def embedding_SD_lincomb(cocrs,
-                         ySD,
-                         years_of_cocrs_columns,
-                         path_to_wvmodel,
-                         y_term,
-                         **kwargs):
-    """Linear combination of embedding- and SD-based predictions
-    """
-
-    pred_size = kwargs.get('pred_size', 50)
-    beta = kwargs.get('beta', 0.5)
-    memory = kwargs.get('memory', 5)
-    scalarization = kwargs.get('scalarization', 'SUM')
-
-
-    assert 0<beta<1, 'beta should be between zero and one.'
-
-    # get all chemicals
-    msdb.crsr.execute('SELECT formula FROM chemical;')
-    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
-
-    model = Word2Vec.load(path_to_wvmodel)
-
-    def embedding_SD_predictor(year_of_pred, sub_chems):
-        
-        # Similar to embedding-based predictions, this predictor 
-        # also can only work with subset of chemicals 
-        # that exist in the vocabulary of their pre-trained model
-        overlap_indic = np.in1d(chems, sub_chems)
-        sub_cocrs = cocrs[overlap_indic, :]
-        sub_ySD = ySD[overlap_indic, :]
-        
-        """ Restricting Attention to Unstudied Materials """
-        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
-        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
-        sub_chems = sub_chems[unstudied_indic]
-        sub_ySD = sub_ySD[unstudied_indic,:yr_loc]
-
-        """ Two Types of Scores """
-        scores_0 = measures.ySD_scalar_metric(sub_ySD,
-                                              mtype=scalarization,
-                                              memory=memory)
-        scores_1 = measures.cosine_sims(model, sub_chems, y_term)
-
-        """ Normalizing Scores' Scales """
-        scores_0 = (scores_0 - scores_0.min()) / (scores_0.max() - scores_0.min())
-        scores_1 = (scores_1 - scores_1.min()) / (scores_1.max() - scores_1.min())
-
-        """ Combining and Sorting Scores """
-        scores = beta*scores_1 + (1-beta)*scores_0
-        sorted_inds = np.argsort(-scores)[:pred_size]
-
-        return sub_chems[sorted_inds]
-
-    return embedding_SD_predictor
 
 def hypergraph_access(cocrs,
                       years_of_cocrs_columns,
@@ -265,52 +216,38 @@ def random_deepwalk(cocrs,
     return random_deepwalk_predictor
 
 
-def countsort_deepwalk(cocrs,
-                       years_of_cocrs_columns,
-                       path_to_deepwalk,
+def countsort_deepwalk(path_to_dw_sents,
+                       studied_ents_func,
                        **kwargs):
 
     pred_size = kwargs.get('pred_size', 50)
     return_scores = kwargs.get('return_scores', False)
+    constraint_func = kwargs.get('constraint_func', None)
 
-    # get all chemicals
-    msdb.crsr.execute('SELECT formula FROM chemical;')
-    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
 
-    # chemicals in the deepwalk
-    deepwalk_chems, counts = hypergraphs.extract_chems_from_deepwalks(path_to_deepwalk)
+    # extract entities in the deepwalk sentences and their counts
+    dw_ents, counts = hypergraphs.extract_chems_from_deepwalks(path_to_dw_sents)
     
-    def countsort_deepwalk_predictor(year_of_pred, sub_chems):
+    def countsort_deepwalk_predictor(year_of_pred):
         
-        if sub_chems is not None:
-            overlap_indic = np.in1d(chems, sub_chems)
-            sub_cocrs = cocrs[overlap_indic, :]
-
-            # make sure that the order of chemicals in sub_chems is the same as
-            # the order of their appearance in the universal array chems
-            # because the order of unstudied_indic that is used
-            # in the following lines corresponds to chems
-            sub_chems = chems[np.isin(chems,sub_chems)]
-
-        else:
-            sub_chems = chems
-            sub_cocrs = cocrs
-
         """ Restricting Attention to Unstudied Materials """
-        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
-        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
-        sub_chems = sub_chems[unstudied_indic]
-
-        # sort chemicals based on their counts in the deepwalk sentences
-        deepwalk_sub_chems = deepwalk_chems[np.isin(deepwalk_chems, sub_chems)]
-        deepwalk_sub_counts = counts[np.isin(deepwalk_chems, sub_chems)]
+        studied_ents = studied_ents_func(year_of_pred)
         
-        sorted_inds = np.argsort(-deepwalk_sub_counts)[:pred_size]
+        """ Computing and Sorting Scores """
+        unstudied_dw_ents = dw_ents[~np.isin(dw_ents,studied_ents)]
+        # filter the unstudied entities if a constraint function is given
+        if constraint_func is not None:
+            unstudied_dw_ents = constraint_func(unstudied_dw_ents)
+
+        # sort entities based on their counts in the deepwalk sentences
+        unstudied_dw_counts = counts[np.isin(dw_ents, unstudied_dw_ents)]
+        
+        sorted_inds = np.argsort(-unstudied_dw_counts)[:pred_size]
 
         if return_scores:
-            return deepwalk_sub_chems[sorted_inds], deepwalk_sub_counts[sorted_inds]
+            return unstudied_dw_ents[sorted_inds], unstudied_dw_counts[sorted_inds]
         else:
-            return deepwalk_sub_chems[sorted_inds]
+            return unstudied_dw_ents[sorted_inds]
 
     return countsort_deepwalk_predictor
 
