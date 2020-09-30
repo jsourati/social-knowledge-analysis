@@ -148,14 +148,37 @@ def compute_vertex_KW_submatrix(db, los, **kwargs):
 
 def find_neighbors(idx, R):
     """Returning neighbors of a node indexed by `idx`
+
+    NOTE: input `idx` can be an array of indices
     """
 
-    # indices of the hyperedges
+    # indices of the hyperedges (there might be repeated hyperedges
+    # here, if idx is an array, but we don't care since the final
+    # result is distinct values of the column list)
     he_inds = R[:,idx].indices
-    nbr_indic = R[he_inds,:].sum(axis=0)
 
-    return np.where(nbr_indic)[1]
+    return np.unique(R[he_inds,:].tocsr().indices)
 
+def find_authors(idx, R, nA, coauthor_deg=1):
+    """Finding common author neighbors of two entities: the property node,
+    and a node specified by its vertex index (`idx`)
+
+    `coauthor_deg` determines the degree of the co-authorship to be considered
+    when finding the common authors. For example, degree=1 implies only the common 
+    authors who have papers on both entities; degree=2 
+    implies considering co-authors of the common authors too; degree=3 considers
+    co-authors of co-authors of the common authors too; so on.
+    """
+
+    assert coauthor_deg>=1, "The co-authorship should be greater than or equal to one."
+    
+    nbrs = find_neighbors(idx,R)
+    authors = nbrs[nbrs<nA]
+    for i in range(2,coauthor_deg):
+        nbrs = find_neighbors(authors, R)
+        authors = np.unique(np.concatenate((authors, nbrs[nbrs<nA])))
+
+    return authors
 
 def year_discoveries(R, year, **kwargs):
     """Finding cooccurrences between the set of entities with at least 
