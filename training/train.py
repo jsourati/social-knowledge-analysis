@@ -137,6 +137,7 @@ class MyCallBack(CallbackAny2Vec):
     def __init__(self, brkpnt=10, model_save_path=None, logger=None):
         self.epoch = 0
         self.losses = []
+        #self.man_acc = []
         self.brkpnt = brkpnt
         self.logger = logger
         self.model_save_path = model_save_path
@@ -150,9 +151,15 @@ class MyCallBack(CallbackAny2Vec):
                 self.losses += [model.get_latest_training_loss() - self.last_loss]
 
             self.last_loss = model.get_latest_training_loss()
+            # manually added evaluator
+            #self.man_acc += [self.man_eval(model)]
 
             if self.model_save_path is not None:
-                model.save(self.model_save_path)
+                if self.epoch==1:
+                    model.save(self.model_save_path)
+                else:
+                    if self.losses[-1] < np.min(self.losses[:-1]):
+                        model.save(self.model_save_path)
 
             if self.logger is not None:
                 self.logger.info('{} Epoch(s) done. Loss: {}, LR: {}'.format(self.epoch,
