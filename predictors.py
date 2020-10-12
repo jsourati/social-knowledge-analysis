@@ -121,52 +121,52 @@ def embedding(ents,
     return embedding_predictor
 
 
-def hypergraph_access(cocrs,
-                      years_of_cocrs_columns,
-                      path_to_VM_core,
-                      path_to_VM_kw,
-                      **kwargs):
+def hypergraph_trans_prob(ents,
+                          row_years,
+                          path_to_VM,
+                          path_to_VMkw,
+                          studied_ents_func,
+                          **kwargs):
     
-    VM = sparse.load_npz(path_to_VM_core)
-    kwVM = sparse.load_npz(path_to_VM_kw)
-    R = sparse.hstack((VM, kwVM), 'csc')
+    VM = sparse.load_npz(path_to_VM)
+    VMkw = sparse.load_npz(path_to_VMkw)
+    R = sparse.hstack((VM, VMkw), 'csc')
+
+    assert R.shape[0]==len(row_years), "number of given years should exactly " + \
+        "match the number of rows in vertex-weight matrix"
 
     pred_size = kwargs.get('pred_size', 50)
     nstep = kwargs.get('nstep', 1)
     memory = kwargs.get('memory', 5)
     #scalarization = kwargs.get('scalarization', 'SUM')
     return_scores = kwargs.get('return_scores', False)
+    constraint_func = kwargs.get('constraint_func', None)
 
-    # get all chemicals
-    msdb.crsr.execute('SELECT formula FROM chemical;')
-    chems = np.array([x[0] for x in msdb.crsr.fetchall()])
+    def access_score(year_of_pred):
 
-    def access_score(year_of_pred, sub_chems):
+        """ Keeping Only Papers in the Selected Date Range """
+        lower_year = year_of_pred-memory if memory>0 else -np.inf
+        subR = R[(lower_year<=row_years)*(row_years<year_of_pred), :]
         
-        if sub_chems is not None:
-            overlap_indic = np.in1d(chems, sub_chems)
-            sub_cocrs = cocrs[overlap_indic, :]
-        else:
-            sub_chems = chems
-            sub_cocrs = cocrs
-
         """ Restricting Attention to Unstudied Materials """
-        yr_loc = np.where(years_of_cocrs_columns==year_of_pred)[0][0]
-        unstudied_indic = np.sum(sub_cocrs[:,:yr_loc], axis=1)==0
-        sub_chems = sub_chems[unstudied_indic]
+        studied_ents = studied_ents_func(year_of_pred)
+        unstudied_ents = ents[~np.isin(ents,studied_ents)]
 
-        years = np.arange(year_of_pred-memory, year_of_pred)
-        scores = measures.accessibility_scores(years,
-                                               R=R,
-                                               sub_chems=sub_chems,
+        # filter the unstudied entities if a constraint function is given
+        if constraint_func is not None:
+            unstudied_ents = constraint_func(unstudied_ents)
+
+        scores = measures.accessibility_scores(ents,
+                                               R=subR,
+                                               sub_ents=unstudied_ents,
                                                nstep=nstep)
 
         sorted_inds = np.argsort(-scores)[:pred_size]
 
         if return_scores:
-            return sub_chems[sorted_inds], scores[sorted_inds]
+            return unstudied_ents[sorted_inds], scores[sorted_inds]
         else:
-            return sub_chems[sorted_inds]
+            return unstudied_ents[sorted_inds]
 
     return access_score
 
@@ -349,21 +349,30 @@ def author_embedding(model_or_path, y_term, **kwargs):
     """
 
     pred_size = kwargs.get('pred_size', 50)
+    constraint_func = kwargs.get('constraint_func', None)
     
     if isinstance(model_or_path, str):
         model = Word2Vec.load(model_or_path)
     else:
         model = model_or_path
 
-    authors = np.array(list(model.wv.vocab.keys()))
-    
-    def author_embedding_predictor(year_of_pred):
-        scores = measures.cosine_sims(model, authors, y_term)
-        sorted_inds = np.argsort(-scores)[:pred_size]
+    # exclude phrases from the list of authors
+    authors = np.array([x for x in model.wv.vocab.keys()
+                        if (x.count('a_')==1) and (x.count('_')==1)])
 
+    # filter the author-set if a constraining function is given
+    if constraint_func is not None:
+        authors = constraint_func(authors)
+
+    scores = measures.cosine_sims(model, authors, y_term)
+    sorted_inds = np.argsort(-scores)[:pred_size]
+
+    # in author prediction, we really don't need year of prediction
+    # but define it that way to keep consistency with other functions
+    def predict_func(year_of_pred):
         return np.array([int(x[2:]) for x in authors[sorted_inds]])
 
-    return author_embedding_predictor
+    return predict_func
 
 
 def mfw2v_deepwalk(cocrs,
