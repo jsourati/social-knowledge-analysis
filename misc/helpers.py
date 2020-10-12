@@ -5,6 +5,7 @@ import json
 import logging
 import numpy as np
 
+import hypergraphs
 
 def set_up_logger(log_name, logfile_path, logger_disable, file_mode='w'):
     """Setting up handler of the "root" logger as the single main logger
@@ -82,6 +83,9 @@ def find_studied_ents_linksdict(file_or_dict,yr):
 
 def gt_discoveries(ents,VW,row_yrs,constraint_func=None):
     """Generating ground truth discoveries in a given year
+
+    VM corresponds only to that part of vertex-weight matrix that 
+    contains the entity columns
     """
 
     assert len(ents)==(VW.shape[1]-1), 'Number of columns in the vertex weight ' +\
@@ -102,7 +106,7 @@ def gt_discoveries(ents,VW,row_yrs,constraint_func=None):
 
         if constraint_func is not None:
             disc_ents = constraint_func(disc_ents)
-        
+            
         return disc_ents
 
     return gt_disc_func
@@ -120,6 +124,24 @@ def gt_discoveries_4CTD(disease):
         return gt
 
     return gt_disc_func
+
+
+def gt_discoverers(ents, VW, row_yrs, **kwargs):
+    """Ground-truth discoverer function
+
+    Here the input vertex-weight matrix `VW` includes the whole columns, that's
+    why we also need the number of authors `nA`
+    """
+
+    assert len(row_yrs)==VW.shape[0], 'Number of rows in the vertex weight ' +\
+        'matrix should equal the number of given years.'
+    
+    def gt_discoverers_func(year_of_pred):
+        auids = hypergraphs.year_discoverers(ents, VW,row_yrs,year_of_pred)
+        return auids
+
+    return gt_discoverers_func
+
 
 
 def prune_deepwalk_sentences(sents, remove='author'):
