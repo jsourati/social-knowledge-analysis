@@ -97,45 +97,40 @@ def eval_author_predictor(discoverers_predictor_func,
                           gt_discoverers_func,
                           year_of_pred,
                           **kwargs):
+    """If return_yrs is True, then the function returns a dictionary
+    that contains the years which true positives happened
+    """
 
-    fixed_size = kwargs.get('fixed_size', True)
+    last_year = kwargs.get('last_year', 2019)
+    return_yrs = kwargs.get('return_yrs', False)
+    
+    preds = discoverers_predictor_func(year_of_pred)
 
-    if fixed_size:
-        preds = discoverers_predictor_func(year_of_pred)
-
-    years_of_eval = np.arange(year_of_pred, 2019)
-    accs = np.zeros(len(years_of_eval))
+    years_of_eval = np.arange(year_of_pred, last_year)
+    precs = np.zeros(len(years_of_eval))
+    inclusive_preds = preds
+    yrs_dict = {}
     for i, yr in enumerate(years_of_eval):
-        gt = np.unique(gt_discoverers_func(yr))
-        
-        if not(fixed_size):
-            preds = discoverers_predictor_func(year_of_pred, len(gt))
-            
-        accs[i] = np.sum(np.in1d(preds, gt)) / len(preds)
-        
-    return accs
+        gt = gt_discoverers_func(yr)
 
+        tpbin = np.isin(preds, gt)
+        precs[i] = np.sum(tpbin)
 
-def gt_discoverers(**kwargs):
+        if return_yrs:
+            tp = inclusive_preds[np.isin(inclusive_preds,gt)]
+            for au in tp:
+                # int() function is added below to keep the year types
+                # int and not numpy.int64 which is not JSON serializable
+                if au in yrs_dict:
+                    yrs_dict[au] += [int(yr)]
+                else:
+                    yrs_dict[au] = [int(yr)]
 
-    R = kwargs.get('R', None)
-    path_to_VM = kwargs.get('path_to_VM', None)
-    path_to_VMkw = kwargs.get('path_to_VMkw', None)
+        # exclude the ones that have already been labeled as a discoverer
+        #preds = preds[~tpbin]
 
-    """ Building General Vertex Weight Matrix (R) """
-    assert (R is not None) or \
-        ((path_to_VM is not None) and (path_to_VMkw is not None)), \
-        'Either the pre-computed vertex weight matrix (R), or the paths \
-         to the submatrices need to be given.'
+    if return_yrs:
+        return precs/len(inclusive_preds), yrs_dict
+    else:
+        return precs/len(inclusive_preds)
 
-    if R is None:
-        VM = sparse.load_npz(path_to_VM)
-        VMkw = sparse.load_npz(path_to_VMkw)
-        R = sparse.hstack((VM, VMkw), 'csc')
-
-    def gt_discoverers_func(year_of_pred):
-        if 'R' in kwargs: del kwargs['R']
-        auids = hypergraphs.year_discoverers(R,year_of_pred)
-        return auids
-
-    return gt_discoverers_func

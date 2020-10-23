@@ -310,6 +310,7 @@ def first_passage_distance_deepwalk(cocrs,
 
 def hypergraph_author_accesss(path_to_VM_core,
                               path_to_VM_kw,
+                              row_yrs,
                               **kwargs):
 
     VM = sparse.load_npz(path_to_VM_core)
@@ -330,8 +331,10 @@ def hypergraph_author_accesss(path_to_VM_core,
             size=pred_size
         
         scores = measures.author_accessibility_scalar_score(R,
+                                                            row_yrs,
                                                             year_of_pred,
-                                                            memory)
+                                                            memory,
+                                                            nstep)
 
         sorted_inds = np.argsort(-scores)[:size]
 

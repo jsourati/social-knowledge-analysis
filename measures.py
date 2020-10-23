@@ -204,7 +204,7 @@ def ySD_scalar_metric(yr_SDs, mtype='SUM', **kwargs):
 
     return scores
 
-def cosine_sims(model, chems, Y_term):
+def cosine_sims(model, chems, Y_term, type='embed_out'):
     """
     Note the following vectors in a gensim's word2vec model:
 
@@ -233,8 +233,11 @@ def cosine_sims(model, chems, Y_term):
             continue
 
         idx = model.wv.vocab[chm].index
-        zo_x = model.trainables.syn1neg[idx,:]
-        #zo_x = model.wv[chm]
+        if type=='embed_out':
+            zo_x = model.trainables.syn1neg[idx,:]
+        elif type=='embed_embed':
+            zo_x = model.wv[chm]
+            
         zo_x = zo_x / np.sqrt(np.sum(zo_x**2))
 
         sims[i] = np.dot(zw_y, zo_x)
@@ -354,8 +357,10 @@ def accessibility_scalar_metric(R,
     return scores
 
 def author_accessibility_scalar_score(R,
+                                      row_yrs,
                                       year,
-                                      memory):
+                                      memory,
+                                      nstep):
 
     nA = 1739453
     nC = 107466
@@ -364,18 +369,16 @@ def author_accessibility_scalar_score(R,
     KW_inds = np.arange(nA+nC, R.shape[1])
     
     years = np.arange(year-memory,year)
-    yrs_scores = np.zeros((memory, nA))
-    for i,yr in enumerate(years):
         
-        Rs = restrict_rows_to_years(R, [yr])
-        P = compute_transprob(Rs)
-        yrs_scores[i,:] = compute_multistep_transprob(P,
-                                                      source_inds=KW_inds,
-                                                      dest_inds=A_inds,
-                                                      interm_inds=C_inds,
-                                                      nstep=2).toarray()[0,:]
+    Rs = R[(row_yrs<year)*(row_yrs>=(year-memory)),:]
+    P = compute_transprob(Rs)
+    scores = compute_multistep_transprob(P,
+                                         source_inds=KW_inds,
+                                         dest_inds=A_inds,
+                                         interm_inds=C_inds,
+                                         nstep=nstep).toarray()[0,:]
 
-    return np.sum(yrs_scores,axis=0)
+    return scores
 
 
 
