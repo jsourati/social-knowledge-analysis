@@ -5,7 +5,7 @@ import json
 import logging
 import numpy as np
 
-import hypergraphs
+
 
 def set_up_logger(log_name, logfile_path, logger_disable, file_mode='w'):
     """Setting up handler of the "root" logger as the single main logger
@@ -81,6 +81,51 @@ def find_studied_ents_linksdict(file_or_dict,yr):
     return np.array([x for x,y in link_dict.items() if y<yr])
 
 
+def year_discoveries(ents, VW, row_yrs, year, return_papers=False):
+    """Finding cooccurrences between the set of entities with at least 
+    one of the property-related keywords that happened for the first 
+    time in a given year
+    """
+        
+    # entities unstudied in the previous years
+    KW_pubs = VW[row_yrs < year,-1]
+    E_pubs  = VW[row_yrs < year, :-1]
+    unstudied_ents = np.asarray(np.sum(E_pubs.multiply(KW_pubs),axis=0)==0)[0,:]
+
+    # entities studied this year
+    KW_pubs = VW[row_yrs==year,-1]
+    E_pubs  = VW[row_yrs==year,:-1]
+    EKW_pubs = E_pubs.multiply(KW_pubs).tocsc()
+    yr_studied_ents = np.asarray(np.sum(EKW_pubs,axis=0)>0)[0,:]
+
+    new_studied_ents = ents[unstudied_ents * yr_studied_ents]
+    
+    if return_papers:
+        # we explicitly need row indices associated with the discovery year, so
+        # that discovery papers can be returned through their IDs 
+        year_pids = np.where(row_yrs==year)[0]
+
+        new_studied_ents_inds = np.where(unstudied_ents * yr_studied_ents)[0]
+        new_studies_papers = {}
+        for idx in new_studied_ents_inds:
+            new_studies_papers[ents[idx]] = year_pids[
+                np.where((EKW_pubs[:,idx]>0).toarray())[0]]
+
+        return new_studied_ents, new_studies_papers
+    else:
+        return new_studied_ents 
+
+    
+def year_discoverers(ents, VW, row_yrs, year):
+
+    disc_ents, papers = year_discoveries(ents, VW[:,-len(ents)-1:], row_yrs, year, True)
+    paper_ids = np.concatenate([pids for _,pids in papers.items()])
+    # extracting the authors
+    auids = np.unique(VW[paper_ids,:-len(ents)-1].tocsr().indices)
+
+    return auids
+
+
 def gt_discoveries(ents,VW,row_yrs,constraint_func=None):
     """Generating ground truth discoveries in a given year
 
@@ -137,7 +182,7 @@ def gt_discoverers(ents, VW, row_yrs, **kwargs):
         'matrix should equal the number of given years.'
     
     def gt_discoverers_func(year_of_pred):
-        auids = hypergraphs.year_discoverers(ents, VW,row_yrs,year_of_pred)
+        auids = year_discoverers(ents, VW,row_yrs,year_of_pred)
         return auids
 
     return gt_discoverers_func
