@@ -159,9 +159,9 @@ def find_neighbors(idx, R):
 
     return np.unique(R[he_inds,:].tocsr().indices)
 
-def find_authors(idx, R, nA, coauthor_deg=1):
-    """Finding common author neighbors of two entities: the property node,
-    and a node specified by its vertex index (`idx`)
+def find_authors(idx, R, nA, coauthor_deg=1, separate=False):
+    """Finding coauthors of a given author/entity specified by its
+    column index in `R` (`idx`)
 
     `coauthor_deg` determines the degree of the co-authorship to be considered
     when finding the common authors. For example, degree=1 implies only the common 
@@ -172,11 +172,24 @@ def find_authors(idx, R, nA, coauthor_deg=1):
 
     assert coauthor_deg>=1, "The co-authorship should be greater than or equal to one."
     
+    authors = {}
+    
     nbrs = find_neighbors(idx,R)
-    authors = nbrs[nbrs<nA]
-    for i in range(2,coauthor_deg):
-        nbrs = find_neighbors(authors, R)
-        authors = np.unique(np.concatenate((authors, nbrs[nbrs<nA])))
+    
+    if separate:
+        prev_authors = authors[1] = nbrs[nbrs<nA]
+        for i in range(1,coauthor_deg):
+            nbrs = find_neighbors(authors[i], R)
+            anbrs = nbrs[nbrs<nA]
+            authors[i+1] = anbrs[~np.isin(anbrs,prev_authors)]
+            prev_authors = np.concatenate([prev_authors,anbrs])
+
+    else:
+        authors = nbrs[nbrs<nA]
+        for i in range(1,coauthor_deg):
+            nbrs = find_neighbors(authors, R)
+            if not(np.any(nbrs<nA)): break
+            authors = np.unique(np.concatenate((authors, nbrs[nbrs<nA])))
 
     return authors
     
@@ -216,8 +229,50 @@ def compute_transprob(R):
     iDE = np.zeros(len(col_collapse), dtype=float)
     iDE[col_collapse>0] = 1./col_collapse[col_collapse>0]
     iDE = sparse.diags(iDE, format='csr')
-    
+
+    #      edge sel.   node sel.
+    #        prob.      prob.
+    #      ---------   -------
     return iDV * R.T * iDE * R
+
+
+def compute_transprob_alpha(R, alpha, nA):
+    """Computing alpha-balanced transition probability, where
+    the edge selection process is the same as above, but the node 
+    selection process is modified such that the probability of selecting
+    non-author nodes is alpha times the probability of selecting authors
+    """
+
+    # same procedure for edge selection 
+    row_collapse = np.array(np.sum(R,axis=0))[0,:]
+    iDV = np.zeros(len(row_collapse), dtype=float)
+    iDV[row_collapse>0] = 1./row_collapse[row_collapse>0]
+    iDV = sparse.diags(iDV, format='csr')
+
+    # the node selection is different than above
+    A_col_collapse = np.array(np.sum(R[:,:nA],axis=1))[:,0]
+    A_iDE = np.zeros(len(A_col_collapse), dtype=float)
+    A_iDE[A_col_collapse>0] = 1/A_col_collapse[A_col_collapse>0]/(alpha+1)
+    E_col_collapse = np.array(np.sum(R[:,nA:],axis=1))[:,0]
+    E_iDE = np.zeros(len(E_col_collapse), dtype=float)
+    E_iDE[E_col_collapse>0] = alpha/E_col_collapse[E_col_collapse>0]/(alpha+1)
+
+    # taking care of paper when there are only authors or non-authors;
+    # for these cases, use the original method
+    col_collapse = np.array(np.sum(R,axis=1))[:,0]
+    A_iDE[(E_iDE==0)*(col_collapse>0)] = 1./A_iDE[(E_iDE==0)*(col_collapse>0)]
+    E_iDE[(A_iDE==0)*(col_collapse>0)] = 1./E_iDE[(A_iDE==0)*(col_collapse>0)]
+    A_iDE = sparse.diags(A_iDE, format='csr')
+    E_iDE = sparse.diags(E_iDE, format='csr')
+
+    # finally, computing the matrix with node selection probabilities
+    # and fill in the blocks corresponding the author and entity columns
+    N1 = A_iDE*R[:,:nA]
+    N2 = E_iDE*R[:,nA:]
+    node_prob = sparse.hstack((N1,N2),'csr')
+
+    return iDV * R.T * node_prob
+    
 
 
 def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
