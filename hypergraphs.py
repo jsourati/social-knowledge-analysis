@@ -155,9 +155,9 @@ def find_neighbors(idx, R):
     # indices of the hyperedges (there might be repeated hyperedges
     # here, if idx is an array, but we don't care since the final
     # result is distinct values of the column list)
-    he_inds = R[:,idx].indices
+    he_inds = R[:,idx].nonzero()[0]
 
-    return np.unique(R[he_inds,:].tocsr().indices)
+    return np.unique(R[he_inds,:].nonzero()[1])
 
 def find_authors(idx, R, nA, coauthor_deg=1, separate=False):
     """Finding coauthors of a given author/entity specified by its
