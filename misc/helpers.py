@@ -1,10 +1,11 @@
 import os
 import sys
+import pdb
 import copy
 import json
 import logging
 import numpy as np
-
+from scipy import sparse
 
 
 def set_up_logger(log_name, logfile_path, logger_disable, file_mode='w'):
@@ -211,6 +212,59 @@ def prune_deepwalk_sentences(sents, remove='author'):
 
     return hl
 
+
+def random_walk_from_transprob(transprob,
+                               start_idx,
+                               L):
+    """Doing a short random walk with length `L` for regular graphs using a 
+    pre-computed transition probability matrix
+    """
+
+    nodes = [start_idx]
+    randgen = np.random.sample
+    for i in range(L-1):
+        try:
+            if transprob[nodes[-1],:].nnz==0:
+                return np.array(nodes)
+            pmf = np.array(transprob[nodes[-1],:].todense())[0,:]
+        except:
+            pdb.set_trace()
+        rnd = randgen()
+        try:
+            cdf = pmf.cumsum()
+            cdf[-1] = 1.
+            nodes += [cdf.searchsorted(rnd)]
+        except:
+            pdb.set_trace()
+
+    return  np.array(nodes)
+
+
+def transprob_from_scores(sims_mat,SD_mat,beta,scale=10):
+
+    transprobs = sparse.lil_matrix(sims_mat.shape,dtype=np.float32)
+    sims_mat = sims_mat.tocsr()
+    SD_mat = SD_mat.tocsr()
+    for i in range(sims_mat.shape[0]):
+        inds = sims_mat[i,:].indices
+        dat = np.array(sims_mat[i,:].todense())[0,:]
+
+        # bringing cosines to [0,1]
+        dat[inds] = (dat[inds]+1)/2
+
+        # linear combination with SD scores
+        dat[inds] = dat[inds] - beta*np.array(SD_mat[i,inds].todense())[0,:]
+
+        # passing through a scaled sigmoid to make them probabilities
+        if np.sum(np.exp(scale*dat[inds]))==0:
+            continue
+        probs = np.exp(scale*dat[inds]) / np.sum(np.exp(scale*dat[inds]))
+
+        rows = np.ones(len(inds))*i
+        transprobs[rows,inds] = probs
+
+    return transprobs
+        
 
 def lighten_color(color, amount=0.5):
     """
