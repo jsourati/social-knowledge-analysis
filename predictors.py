@@ -138,7 +138,7 @@ def hypergraph_trans_prob(ents,
     pred_size = kwargs.get('pred_size', 50)
     nstep = kwargs.get('nstep', 1)
     memory = kwargs.get('memory', 5)
-    #scalarization = kwargs.get('scalarization', 'SUM')
+    alpha = kwargs.get('alpha', None)
     return_scores = kwargs.get('return_scores', False)
     constraint_func = kwargs.get('constraint_func', None)
 
@@ -159,7 +159,8 @@ def hypergraph_trans_prob(ents,
         scores = measures.accessibility_scores(ents,
                                                R=subR,
                                                sub_ents=unstudied_ents,
-                                               nstep=nstep)
+                                               nstep=nstep,
+                                               alpha=alpha)
 
         sorted_inds = np.argsort(-scores)[:pred_size]
 

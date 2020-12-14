@@ -17,8 +17,8 @@ from data import readers
 from misc import helpers
 from training.train import MyCallBack
 from data.utils import MatTextProcessor
-from hypergraphs import compute_transprob, compute_multistep_transprob, \
-   restrict_rows_to_years
+from hypergraphs import compute_transprob, compute_transprob_alpha, \
+    compute_multistep_transprob, restrict_rows_to_years
 
 config_path = '/home/jamshid/codes/data/sql_config_0.json'
 msdb = readers.DB(config_path,
@@ -244,6 +244,34 @@ def cosine_sims(model, chems, Y_term, type='embed_out'):
 
     return sims
 
+def cosine_sims_mat(model, set_1, set_2, type='embed_out'):
+
+    d = model.vector_size
+    Z1 = np.zeros((len(set_1),d))
+    Z2 = np.zeros((len(set_2),d))
+
+    for i,tok in enumerate(set_1):
+        z_1 = model.wv[tok]
+        Z1[i,:] = z_1 / np.sqrt(np.sum(z_1**2))
+
+    
+    for i,tok in enumerate(set_2):
+        if tok not in model.wv.vocab:
+            sims[i] = np.nan
+            continue
+
+        if type=='embed_out':
+            idx = model.wv.vocab[tok].index
+            z_2 = model.trainables.syn1neg[idx,:]
+        elif type=='embed_embed':
+            z_2 = model.wv[chm]
+            
+        Z2[i,:] = z_2 / np.sqrt(np.sum(z_2**2))
+
+
+    return Z1 @ Z2.T
+
+
 def accessibility_scores(ents, R, **kwargs):
     """Computing accessibility between chemicals and the property keywords
 
@@ -262,16 +290,20 @@ def accessibility_scores(ents, R, **kwargs):
     sub_ents = kwargs.get('sub_ents', [])
     direction = kwargs.get('direction', 'KWtoC')
     nstep = kwargs.get('nstep', 1)
+    alpha = kwargs.get('alpha', None)
 
-    """ Computing the Transition Probabilities """
-    P = compute_transprob(R)
-
-    # number of authors, chemicals and the property kewords
+    # number of authors and chemicals
     nE = len(ents)
     nA = R.shape[1] - nE - 1
 
     A_inds = np.arange(nA)
     KW_inds   = [R.shape[1]-1]
+    
+    """ Computing the Transition Probabilities """
+    if alpha is None:
+        P = compute_transprob(R)
+    else:
+        P = compute_transprob_alpha(R,alpha,nA)
 
     """ Match the Order of Entities """
     # getting indices of chemicals needs more care:
@@ -375,7 +407,7 @@ def author_accessibility_scalar_score(R,
     scores = compute_multistep_transprob(P,
                                          source_inds=KW_inds,
                                          dest_inds=A_inds,
-                                         interm_inds=C_inds,
+                                         interm_inds=np.arange(R.shape[1]-1),
                                          nstep=nstep).toarray()[0,:]
 
     return scores
