@@ -5,7 +5,13 @@ import copy
 import json
 import logging
 import numpy as np
+from tqdm import tqdm
 from scipy import sparse
+from joblib import Parallel, delayed
+from multiprocessing import cpu_count
+from pymatgen.core.composition import Composition
+
+ELEMENTS_PATH = '/home/jamshid/codes/data/GNN/data/elements.txt'
 
 
 def set_up_logger(log_name, logfile_path, logger_disable, file_mode='w'):
@@ -264,7 +270,63 @@ def transprob_from_scores(sims_mat,SD_mat,beta,scale=10):
         transprobs[rows,inds] = probs
 
     return transprobs
-        
+
+
+def atomic_features(path_to_elements=None):
+
+    if path_to_elements is None:
+        path_to_elements=ELEMENTS_PATH
+    E = np.array(open(ELEMENTS_PATH, 'r').read().splitlines())
+
+    def give_features(frml):
+        f = np.zeros(len(E))
+        comp = Composition(frml)
+        for el,cnt in comp.element_composition.as_dict().items():
+            f[E==el] = cnt
+        return f
+
+    return give_features
+
+
+def unadjusted_words2sents(sents, w2v_model, alpha):
+    """Computing unadjusted sentence embeddings of in a set
+    of documents using the smoothened weighted average of tokens'
+    embeddings
+    """
+
+    stop_tokens = ['(' ,')', '/', '\\', '?', '!', '+', '.', ',', ':',
+                   ';', '-', '_', '&', '$', '~', '^', '\#', '@', '*',
+                   '<nUm>', '\'', '\"']
+
+    #n_jobs = min(20, cpu_count()-4)
+    #parallel_processor = Parallel(n_jobs=n_jobs)
+
+    def collect_embedding_one_abstract(i):
+        tokens_list = [x.split(' ') for x in sents[i].split(' . ')]
+        tokens_list = [np.array([y for y in x if y in w2v_model.wv.vocab])
+                       for x in tokens_list]
+        tokens_list = [x[~np.isin(x,stop_tokens)] for x in tokens_list]
+        vectors_list = [np.stack([w2v_model.wv[tok]*alpha/(alpha+w2v_model.wv.vocab[tok].count) for tok in x], axis=0).mean(axis=0, keepdims=True)
+                        for x in tokens_list if len(x)>0]
+        vectors = np.concatenate(vectors_list, axis=0)
+
+        return vectors
+    
+    #pbar_1 = tqdm(range(len(sents)), position=0, leave=True)
+    #pbar_1.set_description('Grouping word vectors of sentences based on abstracts')
+    #abstract_vectors = parallel_processor(delayed(process_one_abstract)(i)
+    #                                      for i in pbar_1)
+
+    pbar = tqdm(range(len(sents)), position=0, leave=True)
+    pbar.set_description('Weighted Averaging')
+    abstract_vectors = []
+    for i in range(len(sents)):
+        abstract_vectors += [collect_embedding_one_abstract(i)]
+        pbar.update(1)
+    pbar.close()
+
+    return abstract_vectors
+
 
 def lighten_color(color, amount=0.5):
     """
