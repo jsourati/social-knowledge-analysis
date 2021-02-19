@@ -6,6 +6,7 @@ import random
 import logging
 import pymysql
 import numpy as np
+import networkx as nx
 from scipy import sparse
 from collections import deque
 from multiprocessing import Pool, cpu_count
@@ -159,9 +160,11 @@ def find_neighbors(idx, R):
 
     return np.unique(R[he_inds,:].nonzero()[1])
 
-def find_authors(idx, R, nA, coauthor_deg=1, separate=False):
+def find_authors(idx, GR, nA, coauthor_deg=1, separate=False):
     """Finding coauthors of a given author/entity specified by its
-    column index in `R` (`idx`)
+    node index
+
+    `GR` is either the networkx graph object, or the sparse vertex-weight matrix
 
     `coauthor_deg` determines the degree of the co-authorship to be considered
     when finding the common authors. For example, degree=1 implies only the common 
@@ -171,15 +174,22 @@ def find_authors(idx, R, nA, coauthor_deg=1, separate=False):
     """
 
     assert coauthor_deg>=1, "The co-authorship should be greater than or equal to one."
+
+    if isinstance(GR, nx.classes.graph.Graph):
+        nfinder = lambda x: np.array(list(GR.neighbors(x))) \
+            if not(isinstance(x,(list,np.ndarray))) \
+            else np.concatenate([list(GR.neighbors(xi)) for xi in x])
+    else:
+        nfinder = lambda x: find_neighbors(x, GR)
     
     authors = {}
     
-    nbrs = find_neighbors(idx,R)
+    nbrs = nfinder(idx)
     
     if separate:
         prev_authors = authors[1] = nbrs[nbrs<nA]
         for i in range(1,coauthor_deg):
-            nbrs = find_neighbors(authors[i], R)
+            nbrs = nfinder(authors[i])
             anbrs = nbrs[nbrs<nA]
             authors[i+1] = anbrs[~np.isin(anbrs,prev_authors)]
             prev_authors = np.concatenate([prev_authors,anbrs])
@@ -187,7 +197,7 @@ def find_authors(idx, R, nA, coauthor_deg=1, separate=False):
     else:
         authors = nbrs[nbrs<nA]
         for i in range(1,coauthor_deg):
-            nbrs = find_neighbors(authors, R)
+            nbrs = nfinder(authors)
             if not(np.any(nbrs<nA)): break
             authors = np.unique(np.concatenate((authors, nbrs[nbrs<nA])))
 
@@ -311,6 +321,50 @@ def compute_multistep_transprob(P, source_inds, dest_inds, **kwargs):
         for t in range(1,nstep-2):
             left_mat = left_mat * interm_subP
         return left_mat * dest_subP[interm_inds,:]
+
+    
+def compute_multistep_transprob_memeff(P, R, source_inds, dest_inds, **kwargs):
+    """Computing multi-step transition probabilities in a more
+    memory-efficient method than the classical algorithm
+
+    """
+
+    interm_inds = kwargs.get('interm_inds', None)
+    nstep = kwargs.get('nstep', 1)
+
+    # use the classic method for steps shorter than three
+    if interm_inds is None:
+        interm_inds = np.arange(R.shape[1])
+
+    if nstep<2:
+        return compute_multistep_transprob(P, source_inds, dest_inds,
+                                           interm_inds=interm_inds,
+                                           nstep=nstep)
+    else:
+
+        # initializing the variables for the loop
+        nbrs = find_neighbors(source_inds, R)
+        if interm_inds is not None:
+            nbrs = nbrs[np.isin(nbrs, interm_inds)]
+        current_mat = P[source_inds,:][:,nbrs]
+        next_nbrs = nbrs
+        
+        # repeat ...
+        for t in range(nstep-1):
+            if t==nstep-2:
+                next_nbrs = dest_inds
+            else:
+                next_nbrs = find_neighbors(next_nbrs, R)
+                if interm_inds is not None:
+                    next_nbrs = next_nbrs[np.isin(next_nbrs,interm_inds)]
+
+            # update the transition matrix and neighbors
+            #pdb.set_trace()
+            next_mat = P[nbrs,:][:,next_nbrs]
+            current_mat = current_mat * next_mat
+            nbrs = next_nbrs
+
+    return current_mat
 
 
 def random_walk_seq(R, start_idx, L,
