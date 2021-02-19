@@ -71,4 +71,19 @@ def preprocess_corpus(C, normalize_materials=False):
                                        make_phrases=False)[0])]
 
     return prep_C
-    
+
+
+class CorpusIter(object):
+    """"Class for providing an iteratble on a corpus that consists of
+    several large text files
+
+    Taken from the deepwalk/walks.py of the phanein/deepwalk repository
+    """
+    def __init__(self, file_list):
+        self.file_list = file_list
+        
+    def __iter__(self):
+        for file in self.file_list:
+            with open(file, 'r') as f:
+                for line in f:
+                    yield line.split()

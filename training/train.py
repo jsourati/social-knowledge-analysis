@@ -91,10 +91,9 @@ class W2V(object):
             if key in ['depth', 'phrase_count', 'phrase_threshold',
                        'common_terms', 'exclude_punct', 'include_phrases']: continue
             self.logger.info('\t{}: {}'.format(key, val))
-        self.logger.info('\ttrim rule: {}'.format(self.trim_rule.__name__))
+        if self.trim_rule is not None:
+            self.logger.info('\ttrim rule: {}'.format(self.trim_rule.__name__))
         self.logger.info('The model will be saved in {}'.format(self.model_save_path))
-
-        self.logger.info('='*20 + 'Gensim logging starts' + '='*20)
         
         self.model = Word2Vec(self.sentences,
                               size=self.pars['size'],
