@@ -61,8 +61,11 @@ class UnsGAE(object):
             self.model.load_state_dict(torch.load(weights_path, map_location=self.device))
             
         
-    def init_training(self, neg_num, lr=1e-5, **kwargs):
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+    def init_training(self, neg_num, optim='Adam', lr=1e-5, smooth_par=0.75):
+        if optim=='Adam':
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        elif optim=='SGD':
+            self.optimizer = torch.optim.SGD(self.model.parameters(), lr=lr)
         self.train_one_epoch = self._train_edge_batching
         self.neg_num = neg_num
 
@@ -75,7 +78,7 @@ class UnsGAE(object):
             self.data.load_positive_pairs(kwargs['pos_samples_path'], include_nodes)
             
         if not(hasattr(self.data, 'neg_sampler')):
-            smooth_par = kwargs.get('smooth_par', 0.75)
+            #smooth_par = kwargs.get('smooth_par', 0.75)
             self.data.get_negative_sampler(smooth_par)
 
         if not(hasattr(self.data, 'x_all')):
@@ -110,7 +113,10 @@ class UnsGAE(object):
             batch_X = batch_X.to(torch.float).to(self.device)
 
             # the encoder's output as the embedding
-            batch_Z = self.model.encoder(batch_X, adjs)
+            try:
+                batch_Z = self.model.encoder(batch_X, adjs)
+            except:
+                pdb.set_trace()
             Z += [batch_Z]
 
         Z = torch.cat(Z, dim=0)
@@ -214,6 +220,8 @@ class UnsGAE(object):
 
     def validate(self):
 
+        self.model.eval()
+
         Z = self.embed_all()
         ents_Z = Z[:-1,:][self.data.selected_inds[:-1]>=self.data.nA,:].detach().numpy()
         prop_Z = Z[self.data.tags=='prop',:].detach().numpy()
@@ -246,5 +254,6 @@ class batched_SAGEEncoder(torch.nn.Module):
             x = self.convs[i]((x, x_target), edge_index)
             if i != self.num_layers-1:
                 x = F.relu(x)
+                #x = F.dropout(x, p=0.5, training=self.training)
         return x
                                                                                                                                                 
