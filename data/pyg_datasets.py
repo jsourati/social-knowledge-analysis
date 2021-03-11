@@ -226,7 +226,7 @@ class GNNdata(DataSet):
                     subIMat.data[subIMat.indptr[row]:subIMat.indptr[row+1]]=0
             subIMat.eliminate_zeros()
             
-            self.x_all = load_w2v_features(self.selected_inds.numpy(),
+            self.x_all = load_w2v_features(self.selected_inds,
                                            subIMat[:,:self.nA],
                                            self.ents,
                                            self.prop,
@@ -243,14 +243,18 @@ class GNNdata(DataSet):
         """Loading feature vectors of some nodes into the memroy
         """
 
+
         if self.feature_type in ['atomic', 'w2v']:
             # these features required pre-calculated features
-            return self.x_all[sample_inds,:]
+            batch_X = self.x_all[sample_inds,:]
+            if np.ndim(batch_X)==1:
+                batch_X = np.expand_dims(batch_X, axis=0)
         elif self.feature_type in ['indicator']:
             # for indicator features, the features will be generated on the spot
-            batch_x = np.zeros((len(sample_inds), self.n_x), dtype=np.float32)
-            batch_x[np.arange(len(sample_inds)), sample_inds] = 1
-            return batch_x
+            batch_X = np.zeros((len(sample_inds), self.n_x), dtype=np.float32)
+            batch_X[np.arange(len(sample_inds)), sample_inds] = 1
+
+        return batch_X
                                           
 
 def load_atomic_features(inds_all, chems, nA):
@@ -348,7 +352,9 @@ def load_w2v_features(inds_all,
         # the last index is for the property
         if ind != inds_all[-1]:
             ent = ents[ind-nA]
-            x_all[nA_selected+i,:] = model.wv[ent]/np.sqrt((model.wv[ent]**2).sum())
+            idx = model.wv.vocab[ent].index
+            v = model.trainables.syn1neg[idx,:]
+            x_all[nA_selected+i,:] = v/np.sqrt((v**2).sum())
         else:
             x_all[-1,:] = model.wv[prop]/np.sqrt((model.wv[prop]**2).sum())
 
