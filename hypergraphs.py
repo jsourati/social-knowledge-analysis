@@ -705,32 +705,6 @@ def node_weighting_alpha(data, alpha, block_types):
     return data
 
 
-def extract_chems_from_deepwalks(path_or_sents):
-    """Extracting chemical terms of a set of deepwalk sentences,
-    assuming that the deepwalks have been generated starting from a 
-    single keyword node
-
-    *Returns:*
-
-    * unique values in the deepwalk sentences (excluding the keyword term)
-    * counts of the unique values
-    """
-
-    if isinstance(path_or_sents, str):
-        with open(path_or_sents, 'r') as f:
-            sents = f.read().splitlines()
-    else:
-        sents = path_or_sents
-
-    sents = helpers.prune_deepwalk_sentences(sents)
-    kw = sents[0].split(' ')[0]
-    chems = ' '.join(sents)
-    chems = chems.replace(kw+' ', '')
-    chems = chems.split(' ')
-
-    return np.unique(chems, return_counts=True)
-
-
 def random_chem_select(E, P2C_dict):
     """Randomly selecting chemicals from a set of given papers
     (hyperedges)
