@@ -6,6 +6,7 @@ import logging
 import pymysql
 import numpy as np
 from scipy import sparse
+from scipy.stats import rankdata, norm
 
 from gensim.models import Word2Vec
 
@@ -454,4 +455,49 @@ def author_sim_curves(author_id, keywords, model):
     return years, sims
 
 
+def combine_scores(S1,S2,beta=1,method='ranking'):
+    """This function combines two sets of scores and returns a single
+    score using a combination coefficient beta
     
+    The function is hard-coded such that the coefficient is directly
+    proportional to the attention that it gives to the first set of scores (S1)
+    """
+
+    if method=='ranking':
+        # here, if we want direct relationship (i.e., higher scores in Si
+        # tend to get higher values in S), then use a minus (S1 = -original_S1)
+        # for inverse relationship, we can use the same scores (S1)
+        R1 = rankdata(S1)
+        R2 = rankdata(S2)
+        
+        R = beta*R1 + (1-beta)*R2
+        S = -R
+
+    elif method=='geometric':
+        S1 = np.array(S1)**beta
+        S2 = np.array(S2)**(1-beta)
+        S = S1*S2
+        S = np.sqrt(S)
+        
+    elif method=='harmonic':
+        iS1 = beta / np.array(S1)
+        iS2 = (1-beta) / np.array(S2)
+        iS = (iS1 + iS2) / 2
+        S = 1/iS
+
+    elif method=='z-score':
+        Z1 = (S1-S1.mean())/S1.std()
+        Z2 = (S2-S2.mean())/S2.std()
+        S = beta*Z1 + (1-beta)*Z2
+                                
+    elif method=='van-der-waerden':
+
+        R1 = rankdata(S1)
+        R2 = rankdata(S2)
+        Z1 = norm.ppf(R1/(len(S1)+1))
+        Z2 = norm.ppf(R2/(len(S2)+1))
+
+        S = combine_scores(Z1,Z2,beta,method='z-score')
+        
+    return S
+        
