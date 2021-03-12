@@ -378,3 +378,37 @@ def lighten_color(color, amount=0.5):
         c = color
     c = colorsys.rgb_to_hls(*mc.to_rgb(c))
     return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
+
+
+
+class RestartableIterator(object):
+    def __init__(self, n, size, arr=None, fill=False):
+        self.n = n
+        self.size = size
+        self.array = arr
+        self.fill = fill
+        self._randinds = np.random.permutation(self.n)
+        self.reset()
+
+    def next(self):
+        next_chunk = self.array[self._chunks.pop(0)] if self.array is not None else self._chunks.pop(0)
+        if len(self._chunks)==0:
+            self.reset()
+        return next_chunk
+
+    def reset(self):
+        self._chunks = [self._randinds[x:x+self.size]
+                        for x in range(0,len(self._randinds),self.size)]
+        self._randinds = np.random.permutation(self.n)
+
+        # if all chunks need to have the same size, fill the last item
+        # with random indices that is generated for the next iteration
+        pdb.set_trace()
+        if self.fill:
+            if len(self._chunks[-1])<self.size:
+                # avoiding repitition when filling the last chunk
+                filling_arr = self._randinds[~np.isin(self._randinds, self._chunks[-1])][
+                    :self.size-len(self._chunks[-1])]
+                self._chunks[-1] = np.append(self._chunks[-1], filling_arr)
+                # remove the selected fillig array from the new random indices
+                self._randinds = self._randinds[~np.isin(self._randinds, filling_arr)]
