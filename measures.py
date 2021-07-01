@@ -488,7 +488,7 @@ def combine_scores(S1,S2,beta=1,method='ranking'):
     elif method=='z-score':
         Z1 = (S1-S1.mean())/S1.std()
         Z2 = (S2-S2.mean())/S2.std()
-        S = beta*Z1 + (1-beta)*Z2
+        S = beta*Z1 + (1-np.abs(beta))*Z2
                                 
     elif method=='van-der-waerden':
 
