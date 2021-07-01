@@ -810,3 +810,66 @@ def compute_av_first_passage_distance(sents, node_1, nodes_2,
     else:
         return dists
             
+
+def expert_density_RW(ds, target_ents, subR_noauthors,
+                      jinds_mat, beta, size=1, length=20):
+    '''It is assumed that subVM only has columns that are associated with the drugs
+    in drugs_authors (and not all drugs), hence #cols of subVM = nA + # drugs in drugs_authors
+
+    The list of included drugs' names `target_ents` is only needed to properly name the samples
+    instead of using their numerical indices
+    '''
+    
+    seqs = []
+    for i in range(size):
+        iseq = [jinds_mat.shape[0]-1]
+        iseq_named = [ds]
+        curr_node = jinds_mat.shape[0]-1
+
+        for j in range(length):
+            connected_nodes = find_neighbors(curr_node, subR_noauthors)
+            if beta<=0:
+                EDs = jinds_mat[curr_node,:]
+            else:
+                EDs = np.prod(jinds_mat[iseq,:], axis=0)**(1/len(iseq))
+
+            next_node = EARW_sample(connected_nodes, EDs, beta, curr_node)
+            iseq += [next_node]
+            iseq_named += [ds if next_node==(jinds_mat.shape[0]-1) else target_ents[next_node]]
+            curr_node = next_node
+
+        seqs += [iseq_named]
+
+    return seqs
+        
+
+def EARW_sample(connected_nodes, ED_vals, beta, curr_node):
+    '''Make a sampling corresponding to one step of an expert-aware random walk
+
+    `ED_vals`contains expert-densities between the current node and the rest of the nodes 
+    (which consists of |pool-of-drugs|+1 nodes including the current node)
+    '''
+    
+    # graph sampling distribution
+    if len(connected_nodes)==0:
+        P_g = np.ones(len(ED_vals)) / len(ED_vals)
+    else:
+        P_g = np.zeros(len(ED_vals))
+        P_g[connected_nodes] = 1/len(connected_nodes)
+
+        
+    # ED sampling distribution
+    P_B = np.exp(-np.sign(beta)*ED_vals)
+    P_B = P_B / np.sum(P_B)
+
+
+    # total sampling distribution
+    P = np.abs(beta)*P_B + (1-np.abs(beta))*P_g
+
+    # zero out the curret sample and renormalize to make the RW non-lazy
+    P[curr_node]=0
+    P = P / np.sum(P)
+    
+
+    sample = P.cumsum().searchsorted(np.random.sample())
+    return sample
