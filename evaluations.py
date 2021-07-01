@@ -198,48 +198,62 @@ def SP_diseases_full(ds, drugs_len, subVM, sub_rows, save_dir=None):
     return spds
 
 
-def SP_diseases_authorgraph(ds, drugs_len, subVM, sub_rows, save_dir=None):
+def SP_diseases_authorgraph(base_G, ds, drugs_len, subVM, sub_rows, save_dir=None):
     '''Computing SP distances from authorship graph (excluding all
     other drug nodes
     '''
 
-    base_dir = '/home/jamshid/codes/data/CTD/disease_vertex_weight_submatrices'
-    subVMkw = sparse.load_npz('{}/{}.npz'.format(base_dir,ds))[sub_rows,:]
-    subR = sparse.hstack((subVM,subVMkw))
-
-    subP = hypergraphs.compute_transprob(subR)
-    subP[subP.nonzero()] = 1.
-
-    # create NX authorship graph with the porperty node
     nA = subVM.shape[1] - drugs_len
-    AsubR = sparse.hstack((subR[:,:nA], subR[:,-1]))
-    AsubP = hypergraphs.compute_transprob(AsubR)
-    AsubP[AsubP.nonzero()] = 1.
-    G = nx.from_scipy_sparse_matrix(AsubP)
+    base_dir = '/home/jamshid/codes/data/CTD/disease_vertex_weight_submatrices'
 
+    # loading the base (pure-author) hypergraph
+    if isinstance(base_G, nx.classes.graph.Graph):
+        G = base_G
+    elif isinstance(base_G, str):
+        if os.path.exists(base_G):
+            G = nx.read_adjlist(base_G)
+        else:
+            print('WARNING: The path to pure-author hypergraph (its network object) ' +
+                  'does not exist.\nWe now start computing it from scratch..')
+            auPM = hypergraphs.compute_transprob(subVM[:,:nA])
+            G = nx.from_scipy_sparse_matrix(auPM)
+
+    # adding the disease node to the base graph
+    if ds=='COVID-19':
+        subVMkw = sparse.load_npz('/home/jamshid/codes/data/pubmed_covid19/OVRLP_vertex_weight_KW_submatrix.npz')[sub_rows,:]
+    else:
+        subVMkw = sparse.load_npz('{}/{}.npz'.format(base_dir,ds))[sub_rows,:]
+    subR = sparse.hstack((subVM[:,:nA],subVMkw))
+    nbrs = hypergraphs.find_neighbors(-1,subR)
+    new_edges = [(nA,x) for x in nbrs]
+    G.add_node(nA)
+    G.add_edges_from(new_edges)    
+
+    
     spds = np.zeros(drugs_len)
-    new_node_idx = AsubP.shape[1]   # to be added to the graph for each drug
     for i in range(drugs_len):
         # forming edges from the drug to the author and the property (if any)
-        nbrs = subP[nA+i,:].indices
-        nbrs = nbrs[(nbrs<nA)|(nbrs==subP.shape[0]-1)]
-        nbrs[nbrs==(subP.shape[0]-1)] = AsubP.shape[0]-1
-
-        G.add_node(new_node_idx)
-        edges = [(new_node_idx,x) for x in nbrs] + [(x,new_node_idx) for x in nbrs]
-        G.add_edges_from(edges)
+        # NOTE: the node indices in unaltered G (with authors and property nodes) are
+        # consistent with the first nA+1 columns of R below (and the last added column
+        # will correspond to the new drug node (to be added)
+        R = sparse.hstack((subR, subVM[:,nA+i]))
+        nbrs = hypergraphs.find_neighbors(-1,R)
+        G.add_node(nA+1)    # nA+1 is the index of new drug node
+        new_edges = [(nA+1,x) for x in nbrs]
+        G.add_edges_from(new_edges)
 
         try:
-            spds[i] = nx.shortest_path_length(G, source=AsubP.shape[1]-1, target=new_node_idx)
+            spds[i] = nx.shortest_path_length(G, source=nA, target=nA+1)
         except Exception as ex:
             if type(ex).__name__ == 'NetworkXNoPath':
                 spds[i] = -1
 
+        G.remove_node(nA+1)
 
-        G.remove_node(new_node_idx)
-
-        if not(i%10):
+        if not(i%100):
             print(i,end=',')
+
+    G.remove_node(nA)
 
     if save_dir is not None:
         np.savetxt('{}/{}_authorgraph.txt'.format(save_dir,ds), spds,fmt='%d')
@@ -254,7 +268,9 @@ def get_AAI_orbits(drugs, txt_model, diseases_with_codes, **kwargs):
     '''
 
     metric = kwargs.get('metric', 'emb_cosine')
-    row_years = kwargs.get('row_years', 'None')
+    row_years = kwargs.get('row_years', None)
+    target_ents = kwargs.get('target_ents', None)
+    txt_sims = kwargs.get('txt_sims', None)
     silent = kwargs.get('silent', True)
     save_dir = kwargs.get('save_dir', None)
     spds = kwargs.get('spds', None)
@@ -289,10 +305,11 @@ def get_AAI_orbits(drugs, txt_model, diseases_with_codes, **kwargs):
     # (the ones outside does not have SPds computed for them, and
     # it doesn't make sense to make their SPds infinity either, because
     # they don't have any nodes in the network at all)
-    VM = sparse.load_npz('/home/jamshid/codes/data/pubmed_covid19/OVRLP_vertex_weight_matrix.npz')
-    nA = VM.shape[1] - len(drugs)
-    subVM = VM[(row_years>=1996)*(row_years<=2000),:]
-    target_ents = drugs  # drugs[np.unique(subVM[:,nA:].nonzero()[1])]
+    if target_ents is None:
+        VM = sparse.load_npz('/home/jamshid/codes/data/pubmed_covid19/OVRLP_vertex_weight_matrix.npz')
+        nA = VM.shape[1] - len(drugs)
+        subVM = VM[(row_years>=1996)*(row_years<=2000),:]
+        target_ents = drugs[np.unique(subVM[:,nA:].nonzero()[1])]
 
     
     # get SPd mapping: (f(x) = x if x<5
@@ -307,6 +324,7 @@ def get_AAI_orbits(drugs, txt_model, diseases_with_codes, **kwargs):
             return 6
         else:
             raise ValueError('SPd values should be a bounded integer >-1')
+        
         
     results_per_disease = {}
     for ds,code in diseases_with_codes.items():
@@ -343,13 +361,21 @@ def get_AAI_orbits(drugs, txt_model, diseases_with_codes, **kwargs):
         drugs_scores = np.array([all_scores[dr_ids==x][0]
                                  if x in dr_ids else np.nan for x in drugs_ids])
 
-        gt_func = helpers.gt_discoveries_4CTD(ds)
-        GT = np.concatenate([gt_func(y) for y in range(2001,2020)])
+        if ds=='COVID-19':
+            drug_inds_in_D = json.load(open('/home/jamshid/codes/data/pubmed_covid19/relevant_drugs.json','r'))
+            pos = np.array(list(drug_inds_in_D.keys()))
+        else:
+            gt_func = helpers.gt_discoveries_4CTD(ds)
+            pos = np.concatenate([gt_func(y) for y in range(2001,2020)])
+        neg = list(set(drugs)-set(pos))
+        pos_avscores = get_drug_scores(pos, drugs_scores, nonan=True).mean()
+        neg_avscores = get_drug_scores(neg, drugs_scores, nonan=True).mean()
+        posneg_avscores = (pos_avscores, neg_avscores)
 
         # getting the alienness (SPds) and the plausability (woord2vec) scores
         if spds is None:
             try:
-                spds = np.loadtxt('/home/jamshid/codes/data/CTD/AAI/SPDs/{}.txt'.format(ds))
+                spds = np.loadtxt('/home/jamshid/codes/data/CTD/AAI/SPDs/{}_authorgraph.txt'.format(ds))
             except:
                 continue
         else:
@@ -357,9 +383,10 @@ def get_AAI_orbits(drugs, txt_model, diseases_with_codes, **kwargs):
             cp_spds = copy.deepcopy(spds)
         inf_val = spds.max()+1
         cp_spds[cp_spds==-1] = inf_val
-        
-        txt_sims = measures.cosine_sims(txt_model,target_ents,ds.lower())
-        txt_sims[np.isnan(txt_sims)] = -np.inf
+
+        if txt_sims is None:
+            txt_sims = measures.cosine_sims(txt_model,target_ents,ds.lower())
+            txt_sims[np.isnan(txt_sims)] = -np.inf
 
         # running alien AI for different beta values
         S1 = np.array([cp_spds[drugs==x][0] for x in target_ents])
@@ -372,13 +399,17 @@ def get_AAI_orbits(drugs, txt_model, diseases_with_codes, **kwargs):
             nonan_S1 = S1[~np.isnan(target_scores)]
             nonan_S2 = S2[~np.isnan(target_scores)]
             # change the follwing to nonan_...
-                                
+
+        nonan_scores = get_drug_scores(nonan_target_ents, drugs_scores,
+                                       correct_order=True)
+        nonan_spds = np.array([cp_spds[drugs==x][0] for x in nonan_target_ents])
 
         betas = np.arange(-10,11) * 0.1
         spd_levels = np.arange(1,7)
         lai_percs = np.zeros((6,len(betas)))
         lai_scores = np.zeros((6,len(betas)))
         precs = np.zeros(len(betas))
+        disc_years = []
         ovscores = np.zeros(len(betas))
         for i,beta in enumerate(betas):
             S = measures.combine_scores(nonan_S1, nonan_S2, beta=beta, method='van-der-waerden')
@@ -396,11 +427,14 @@ def get_AAI_orbits(drugs, txt_model, diseases_with_codes, **kwargs):
             lai_scores[:,i] = [np.mean(x[~np.isnan(x)]) if np.ndim(x)>0 else x
                                for x in lai_scores_wnan]
 
-            precs[i] = np.sum(np.isin(preds,GT))/len(preds)
+            precs[i] = np.sum(np.isin(preds,pos))/len(preds)
             ovscores[i] = np.mean(preds_scores[~np.isnan(preds_scores)])
-            
 
-        results_per_disease[ds] = [lai_percs, lai_scores, precs, ovscores]
+            if (beta==1.) or (beta==-1.):
+                ovscores[i] = compute_extremeB_scores(nonan_spds, nonan_scores,
+                                                      beta, 50)
+                
+        results_per_disease[ds] = [lai_percs, lai_scores, precs, ovscores, posneg_avscores]
 
         if save_dir is not None:
             ds_save_dir = os.path.join(save_dir,ds)
@@ -414,7 +448,35 @@ def get_AAI_orbits(drugs, txt_model, diseases_with_codes, **kwargs):
     
     return results_per_disease
 
-        
-        
-        
-        
+
+def compute_extremeB_scores(spds, scores, beta, k):
+
+    if beta==-1.:
+        vals,reps = np.unique(spds,return_counts=True)
+        included_orbit_cnts = []
+        included_orbits = []
+        i = 0
+        while np.sum(included_orbit_cnts)<k:
+            included_orbit_cnts += [reps[i]]
+            included_orbits += [vals[i]]
+            i += 1
+
+    elif beta==1.:
+        vals,reps = np.unique(spds,return_counts=True)
+        included_orbit_cnts = []
+        included_orbits = []
+        i = 1
+        while np.sum(included_orbit_cnts)<k:
+            included_orbit_cnts += [reps[-i]]
+            included_orbits += [vals[-i]]
+            i += 1
+
+    included_orbit_cnts[-1] = k-np.sum(included_orbit_cnts[:-1]) 
+    
+    S = [np.mean(scores[spds==included_orbits[i]])*included_orbit_cnts[i]
+         for i in range(len(included_orbits))]
+
+    final_score = np.mean(S) / np.sum(included_orbit_cnts)
+
+
+    return final_score
